@@ -107,29 +107,58 @@ export async function chooseVerifiedChatGptWindow(titleHint = '') {
   }
 
   const { winner, scored } = pickBestCredibleWindowCandidate(candidates, titleHint);
-  if (!winner) {
-    throw new StepError('CHATGPT_TARGET_NOT_FOUND', 'select-window', 'No credible ChatGPT browser window was found. Open an existing ChatGPT tab/window first, then retry.', {
+  if (winner) {
+    return {
+      selectedWindow: winner.window,
+      evidence: winner,
+      candidates: scored
+    };
+  }
+
+  const fallbackWindow = pickFallbackBrowserWindow(windows, titleHint);
+  if (!fallbackWindow) {
+    throw new StepError('CHATGPT_TARGET_NOT_FOUND', 'select-window', 'No Chrome/Edge window was suitable for ChatGPT navigation.', {
       titleHint,
-      windows: windows.map((window) => ({ handle: window.handle, title: window.title })),
-      candidates: candidates.map((candidate) => ({
-        handle: candidate.window.handle,
-        title: candidate.window.title,
-        url: candidate.url,
-        composerMatched: Boolean(candidate.composerElement)
-      }))
+      windows: windows.map((window) => ({ handle: window.handle, title: window.title }))
     });
   }
 
   return {
-    selectedWindow: winner.window,
-    evidence: winner,
+    selectedWindow: fallbackWindow,
+    evidence: {
+      window: fallbackWindow,
+      url: '',
+      composerElement: null,
+      titleMatched: isChatGptTitle(fallbackWindow.title, titleHint),
+      urlMatched: false,
+      composerMatched: false,
+      credible: false,
+      score: 0,
+      reasons: ['browser-window-fallback']
+    },
     candidates: scored
   };
+}
+
+function pickFallbackBrowserWindow(windows, titleHint = '') {
+  const normalizedHint = String(titleHint || '').trim().toLowerCase();
+  const scored = windows
+    .map((window, index) => {
+      const title = String(window?.title || '').toLowerCase();
+      let score = 0;
+      if (normalizedHint && title.includes(normalizedHint)) score += 50;
+      if (title.includes('chatgpt')) score += 100;
+      if (title.includes('new tab') || title.includes('새 탭') || title.includes('about:blank')) score += 20;
+      return { window, score, index };
+    })
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+  return scored[0]?.window || null;
 }
 
 export const __windowTargetingInternals = {
   isChatGptUrl,
   isChatGptTitle,
   scoreWindowTargetEvidence,
-  pickBestCredibleWindowCandidate
+  pickBestCredibleWindowCandidate,
+  pickFallbackBrowserWindow
 };

@@ -100,8 +100,12 @@ function Write-WorkerLog($event) {
     }
   }
   $line = $payload | ConvertTo-Json -Depth 10 -Compress
-  [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($LogPath)) | Out-Null
-  Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+  try {
+    [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($LogPath)) | Out-Null
+    Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8 -ErrorAction Stop
+  } catch {
+    # best-effort logging only; never crash the worker because the log file is locked
+  }
 }
 
 function New-ErrorResult($code, $message, $data = $null) {

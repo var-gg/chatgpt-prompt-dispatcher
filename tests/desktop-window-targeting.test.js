@@ -6,7 +6,8 @@ const {
   isChatGptUrl,
   isChatGptTitle,
   scoreWindowTargetEvidence,
-  pickBestCredibleWindowCandidate
+  pickBestCredibleWindowCandidate,
+  pickFallbackBrowserWindow
 } = __windowTargetingInternals;
 
 test('isChatGptUrl only accepts real chatgpt hosts', () => {
@@ -70,4 +71,23 @@ test('pickBestCredibleWindowCandidate rejects generic chrome windows when no cre
 
   assert.equal(winner, null);
   assert.deepEqual(scored, []);
+});
+
+test('pickFallbackBrowserWindow still returns a usable browser window when no ChatGPT evidence exists', () => {
+  const winner = pickFallbackBrowserWindow([
+    { handle: 1, title: 'Docs - Google Chrome' },
+    { handle: 2, title: 'about:blank - Chrome' }
+  ], 'Chrome');
+
+  assert.equal(winner.handle, 2);
+});
+
+test('pickFallbackBrowserWindow prefers an existing ChatGPT-looking browser window when available', () => {
+  const winner = pickFallbackBrowserWindow([
+    { handle: 1, title: 'Docs - Google Chrome' },
+    { handle: 2, title: 'ChatGPT - Chrome' },
+    { handle: 3, title: 'about:blank - Chrome' }
+  ], 'Chrome');
+
+  assert.equal(winner.handle, 2);
 });

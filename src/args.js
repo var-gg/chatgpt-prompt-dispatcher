@@ -10,63 +10,79 @@ function consumeValue(argv, index, token) {
   return value;
 }
 
-export async function parseSubmitArgs(argv = []) {
-  const options = {
+function parseCommonArgs(argv = [], options = {}) {
+  const parsed = {
     attachments: [],
     dryRun: false,
     newChat: undefined,
     profile: 'default',
-    mode: 'auto'
+    mode: 'auto',
+    holdOpenMs: 0,
+    ...options
   };
 
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     switch (token) {
       case '--prompt':
-        options.prompt = consumeValue(argv, i, token);
+        parsed.prompt = consumeValue(argv, i, token);
         i += 1;
         break;
       case '--prompt-file':
-        options.promptFile = consumeValue(argv, i, token);
+        parsed.promptFile = consumeValue(argv, i, token);
         i += 1;
         break;
       case '--mode':
-        options.mode = consumeValue(argv, i, token);
+        parsed.mode = consumeValue(argv, i, token);
         i += 1;
         break;
       case '--project':
-        options.project = consumeValue(argv, i, token);
+        parsed.project = consumeValue(argv, i, token);
         i += 1;
         break;
       case '--new-chat':
-        options.newChat = true;
+        parsed.newChat = true;
         break;
       case '--no-new-chat':
-        options.newChat = false;
+        parsed.newChat = false;
         break;
       case '--attachment':
-        options.attachments.push(consumeValue(argv, i, token));
+        parsed.attachments.push(consumeValue(argv, i, token));
         i += 1;
         break;
       case '--profile':
-        options.profile = consumeValue(argv, i, token);
+        parsed.profile = consumeValue(argv, i, token);
         i += 1;
         break;
       case '--dry-run':
-        options.dryRun = true;
+        parsed.dryRun = true;
         break;
       case '--screenshot-path':
-        options.screenshotPath = consumeValue(argv, i, token);
+        parsed.screenshotPath = consumeValue(argv, i, token);
         i += 1;
         break;
       case '--browser-profile-dir':
-        options.browserProfileDir = consumeValue(argv, i, token);
+        parsed.browserProfileDir = consumeValue(argv, i, token);
+        i += 1;
+        break;
+      case '--hold-open-ms':
+        parsed.holdOpenMs = Number(consumeValue(argv, i, token));
         i += 1;
         break;
       default:
         throw new StepError(ERROR_CODES.INVALID_ARGS, 'parse-args', `Unknown argument: ${token}`);
     }
   }
+
+  if (!Number.isFinite(parsed.holdOpenMs) || parsed.holdOpenMs < 0) {
+    throw new StepError(ERROR_CODES.INVALID_ARGS, 'parse-args', '--hold-open-ms must be a non-negative number.');
+  }
+
+  return parsed;
+}
+
+export async function parseSubmitArgs(argv = []) {
+  const options = parseCommonArgs(argv);
 
   if (!options.prompt && !options.promptFile) {
     throw new StepError(ERROR_CODES.INVALID_ARGS, 'parse-args', 'Either --prompt or --prompt-file is required.');
@@ -86,5 +102,10 @@ export async function parseSubmitArgs(argv = []) {
     options.newChat = !options.project;
   }
 
+  return options;
+}
+
+export async function parseWarmupArgs(argv = []) {
+  const options = parseCommonArgs(argv, { holdOpenMs: 30 * 60 * 1000 });
   return options;
 }

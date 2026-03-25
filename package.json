@@ -16,7 +16,8 @@
     "pack-skill": "node src/pack-skill.js",
     "install-local": "node src/install-local.js",
     "register-openclaw": "node src/register-openclaw.js",
-    "submit": "node src/index.js submit-chatgpt"
+    "submit": "node src/index.js submit-chatgpt",
+    "warmup": "node src/index.js warmup-chatgpt"
   },
   "keywords": [
     "chatgpt",

@@ -1,6 +1,7 @@
 import { loadProfile } from './profile-loader.js';
 import { validateConfig } from './config-schema.js';
 import { submitChatgpt } from './submit-chatgpt.js';
+import { warmupChatgpt } from './warmup-chatgpt.js';
 import { runSmoke } from './smoke.js';
 
 /**
@@ -33,6 +34,12 @@ export async function runCli(argv = []) {
     return;
   }
 
+  if (command === 'warmup-chatgpt') {
+    const receipt = await warmupChatgpt(argv.slice(1));
+    console.log(JSON.stringify(receipt, null, 2));
+    return;
+  }
+
   throw new Error(`Unknown command: ${command}`);
 }
 
@@ -45,6 +52,7 @@ function printHelp() {
     '  profile:show <name>      Load and print a sample profile',
     '  smoke                    Run placeholder smoke check',
     '  submit-chatgpt [opts]    Submit a prompt through visible browser automation',
+    '  warmup-chatgpt [opts]    Open ChatGPT and hold the browser for manual login/captcha',
     '',
     'TODO:',
     '  Add visible browser automation dispatch commands.',

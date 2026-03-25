@@ -77,7 +77,7 @@ export async function createPlaywrightAutomationSession({ profile, args, screens
       }
     },
 
-    async ensureLoggedInOrWait() {
+    async ensureLoggedInOrWait(timeoutMs = LOGIN_WAIT_TIMEOUT_MS) {
       if (await isLoggedIn(state.page)) {
         notes.push('loginState=ready');
         await markStep('ensure-login', { loginState: 'ready' });
@@ -96,12 +96,21 @@ export async function createPlaywrightAutomationSession({ profile, args, screens
           const loginWords = ['Log in', '로그인', 'Sign up', '회원가입'];
           const looksLoggedOut = loginWords.some((word) => text.includes(word));
           return hasPrompt && !looksLoggedOut;
-        }, { timeout: LOGIN_WAIT_TIMEOUT_MS });
+        }, { timeout: timeoutMs });
         notes.push('loginState=completed');
-        await markStep('ensure-login', { loginState: 'completed' });
+        await markStep('ensure-login', { loginState: 'completed', timeoutMs });
       } catch {
         await this.captureScreenshot();
-        throw new StepError(ERROR_CODES.LOGIN_REQUIRED, 'ensure-login', 'Manual login was not completed within the wait window.', { lastSuccessfulStep: state.lastSuccessfulStep });
+        throw new StepError(ERROR_CODES.LOGIN_REQUIRED, 'ensure-login', 'Manual login was not completed within the wait window.', { lastSuccessfulStep: state.lastSuccessfulStep, timeoutMs });
+      }
+    },
+
+    async holdOpen(durationMs = 0) {
+      const waitMs = Math.max(0, Number(durationMs) || 0);
+      notes.push(`holdOpenMs=${waitMs}`);
+      await markStep('hold-open', { durationMs: waitMs });
+      if (waitMs > 0) {
+        await state.page.waitForTimeout(waitMs);
       }
     },
 

@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-and-package:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Package skill bundle
+        run: npm run pack-skill
+
+      - name: Upload skill bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatgpt-web-submit-bundle
+          path: |
+            dist/chatgpt-web-submit-bundle.zip
+            dist/skill-bundle/

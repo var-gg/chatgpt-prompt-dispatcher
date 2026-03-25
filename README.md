@@ -1,88 +1,196 @@
-# chatgpt-prompt-dispatcher
+# Unofficial local input automation for ChatGPT web
 
-MVP for local ChatGPT web input automation on a logged-in browser session.
+`chatgpt-prompt-dispatcher` is an unofficial, local-only tool for submitting prepared prompts into a locally logged-in ChatGPT web session through visible browser automation.
 
-## Scope
+## Purpose
 
-- Open a new chat when no project is specified.
-- Enter a prompt into the local logged-in ChatGPT browser session and submit it.
-- Enter a specified ChatGPT Project first when requested, then submit.
-- Support attachment-menu handling as part of the browser flow.
-- Prioritize Korean Windows and ChatGPT Pro UI, with Plus fallback considerations.
+- Open ChatGPT Web in a local logged-in browser session.
+- Optionally enter a specified ChatGPT Project first.
+- Optionally start a new chat.
+- Optionally attach files through the visible tools/attachment menu.
+- Choose a supported mode and submit the prompt.
+- Return a submission receipt JSON instead of response content.
 
-## Non-goals
+## Non-Goals
 
-- Read or scrape model responses.
-- Call unofficial APIs or internal endpoints.
-- Automate login.
-- Extract, back up, or export cookies/account/session material.
+This project intentionally does **not**:
+- read assistant responses
+- scrape DOM output or transcript content
+- call unofficial APIs or internal endpoints
+- automate login
+- export cookies, tokens, or browser session material
+- back up account/session secrets
 
-## Architecture
+## Security Boundary
 
-- Repository root = source of truth.
-- `skill/` = portable install bundle.
-- Runtime state = separate from the repository and portable bundle.
-- Host adapters live under `adapters/` as thin wrappers around core logic.
+Allowed:
+- visible browser automation in a local logged-in session
+- manual login by the user, with the tool only waiting for completion
+- visible project selection, mode selection, prompt input, and attachment-menu interaction
 
-## Layout
+Forbidden:
+- response collection
+- hidden API usage
+- login automation
+- browser storage extraction
+- token/cookie/session export
 
-- `src/` core implementation and CLI scaffolding
-- `profiles/` sample runtime profiles
-- `tests/` automated smoke/test scaffolding
-- `docs/adr/` architecture decisions
-- `adapters/openclaw/` OpenClaw-specific wrapper notes
-- `adapters/mcp/` MCP-specific wrapper notes
-- `skill/` portable bundle root for installation/materialization
+## Supported Environment
 
-## CLI
+- Korean Windows first (`ko-KR.windows.*` profiles)
+- ChatGPT Pro UI first
+- ChatGPT Plus fallback supported through a separate profile
+- Local browser session only
 
-Primary command forms:
+## Core Commands
 
-- `node src/index.js submit-chatgpt --prompt "안녕" --dry-run`
-- `npm run submit -- --prompt-file .\\prompt.txt --project "Example Project" --mode thinking --attachment .\\sample.txt`
+```bash
+npm install
+npm test
+npm run pack-skill
+npm run submit -- --prompt "안녕하세요" --profile ko-KR.windows.pro --dry-run
+npm run submit -- --prompt-file .\prompt.txt --project "Example Project" --mode thinking --attachment .\sample.txt --profile ko-KR.windows.pro --dry-run
+npm run install-local -- --mode symlink
+npm run install-local -- --mode copy --target .\.tmp\local-skill-install --profile ko-KR.windows.pro
+```
 
-Submission output is always a JSON receipt. It reports submission metadata only and does **not** include response scraping.
+## Flow Summary
 
-## Test Strategy
+### New Chat Flow
 
-- `npm test`
-  - unit tests only
-  - argument parsing, profile interpretation, flow planning, and receipt generation
-  - includes smoke command gating verification without launching a real browser
-- `npm run smoke`
-  - live smoke entrypoint
-  - does nothing by default unless `LIVE_CHATGPT=1` is explicitly set
-  - intended for visible local browser checks only
+Used when no project is specified.
+
+1. Launch persistent local browser profile.
+2. Open `https://chatgpt.com/`.
+3. Wait for manual login if needed.
+4. Start a new chat.
+5. Select mode if requested.
+6. Attach files if requested.
+7. Input prompt.
+8. Submit.
+
+### Project Flow
+
+Used when `--project` is specified.
+
+1. Launch persistent local browser profile.
+2. Open `https://chatgpt.com/`.
+3. Wait for manual login if needed.
+4. Enter the specified project.
+5. Select mode if requested.
+6. Attach files if requested.
+7. Input prompt.
+8. Submit.
+
+### Attachment Flow
+
+Attachments are limited to visible UI interaction only:
+- open tools/attachment menu
+- choose upload entry
+- submit selected local files
+
+No hidden upload endpoints or session extraction are used.
+
+## Dry Run
+
+Use `--dry-run` to stop before actual submission.
+
+Dry run returns:
+- submission receipt JSON
+- resolved mode/project notes
+- flow interpretation notes
+- screenshot/artifact path
+- structured log path
 
 Example:
 
-- `npm test`
-- `LIVE_CHATGPT=1 npm run smoke -- --prompt "테스트" --profile ko-KR.windows.pro --dry-run`
+```bash
+npm run submit -- --prompt "테스트" --project "Example Project" --mode thinking --attachment .\README.md --profile ko-KR.windows.pro --dry-run
+```
 
-## Observability
+## Testing Strategy
 
-- Structured execution logs are written as JSONL under `artifacts/logs/`.
-- Screenshots and failure artifacts are written under `artifacts/` and are gitignored.
-- Receipts include `notes` entries for `logPath` and `lastStep`.
+### Unit Tests
 
-## Packaging and Host Integration
+```bash
+npm test
+```
 
-- `npm run pack-skill`
-  - builds a shareable bundle under `dist/skill-bundle/`
-  - creates `dist/chatgpt-web-submit-bundle.zip`
-- `npm run install-local -- --mode symlink`
-- `npm run install-local -- --mode copy --target <path>`
+Covers:
+- argument parsing
+- profile interpretation
+- flow planning
+- receipt generation
+- smoke command gating
 
-Install metadata is tracked in `skill.install.lock.json`.
+### Live Smoke
 
-## Explicit Non-Goal
+```bash
+LIVE_CHATGPT=1 npm run smoke -- --prompt "live smoke" --profile ko-KR.windows.pro --dry-run
+```
 
-- Response collection/scraping is intentionally **not implemented**.
+Live smoke is opt-in only. Without `LIVE_CHATGPT=1`, it exits with a skip message.
 
-## Status
+## Packaging and Installation
 
-- Repository scaffolded.
-- ADR 0001 and ADR 0002 added.
-- Portable skill bundle scaffolded under `skill/`.
-- Core submit CLI scaffolded with receipt JSON output and step-based failure reporting.
-- Visible browser automation implementation is still placeholder/TODO.
+### Build Shareable Skill Bundle
+
+```bash
+npm run pack-skill
+```
+
+Outputs:
+- `dist/skill-bundle/`
+- `dist/chatgpt-web-submit-bundle.zip`
+
+### Local Install
+
+```bash
+npm run install-local -- --mode symlink
+npm run install-local -- --mode copy --target <path> --profile ko-KR.windows.pro
+```
+
+Install state is tracked in `skill.install.lock.json`.
+
+## Logging and Failure Artifacts
+
+Runtime artifacts are written outside source control:
+- `artifacts/logs/*.jsonl`
+- `artifacts/screenshots/*`
+
+Receipts include notes for:
+- `logPath`
+- `lastStep`
+
+## Troubleshooting
+
+### The tool says login is required
+- Log in manually in the local browser session.
+- Re-run or continue only after ChatGPT Web is visibly ready.
+
+### A mode option is not found
+- Check whether the selected profile matches the active UI tier.
+- Try `ko-KR.windows.pro` first for Pro UI.
+- Update profile candidates if ChatGPT labels drift.
+
+### Project navigation fails
+- Verify the project name exactly.
+- Confirm the visible Projects entry exists in the current UI.
+- Add candidate labels/text/selectors to the relevant profile if needed.
+
+### Attachment menu differs
+- Update the tools-menu candidate list in the selected profile.
+- Keep changes in profile data rather than hard-coding selectors.
+
+### CI passes but live UI still fails
+- This is expected when UI labels drift.
+- Reproduce with `--dry-run`, inspect logs, update profile candidates, and re-test.
+
+## Current Status
+
+- Core CLI scaffold implemented
+- Profile-driven UI resolution implemented
+- Structured logging and failure receipts implemented
+- Portable skill packaging implemented
+- OpenClaw and MCP adapter scaffolds implemented
+- Response collection intentionally not implemented

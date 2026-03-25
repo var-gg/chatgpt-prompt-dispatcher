@@ -195,7 +195,7 @@ npm run register-openclaw
 ## Repo layout
 
 - `src/submit-chatgpt.js` = desktop-first transport router
-- `src/desktop/` = Windows desktop dispatcher implementation
+- `src/desktop/` = Windows desktop dispatcher implementation + persistent PowerShell worker
 - `src/submit-browser-chatgpt.js` = experimental browser transport
 - `src/playwright-runtime.js` = retained Playwright automation runtime
 - `skill/` = portable skill bundle source
@@ -203,3 +203,4 @@ npm run register-openclaw
 ## Architecture reference
 
 See `docs/desktop-first-architecture.md`.
+cture.md`.

@@ -65,13 +65,14 @@ These are easy to unit test and keep desktop behavior auditable.
 
 ### 4. Windows desktop driver
 
-Node-first wrapper that shells out to PowerShell for small focused actions:
+Node-first wrapper around a persistent PowerShell worker over stdio:
 - activate/focus window by title hint
 - move/resize a window toward a standard rectangle
 - mouse click
 - type text
 - paste clipboard text
 - key press / key chord
+- UIAutomation queries and waits
 
 This layer is intentionally thin. It is an execution adapter, not a policy engine.
 

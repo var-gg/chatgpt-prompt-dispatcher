@@ -23,6 +23,7 @@ Explicit alias:
 Implementation:
 - `src/submit-chatgpt.js` routes to desktop unless `--transport=browser` is present.
 - `src/desktop/submit-desktop-chatgpt.js` performs the Windows input dispatch.
+- `src/desktop/worker-client.js` keeps a persistent PowerShell desktop worker alive over stdio.
 
 Current desktop scope:
 - focus a visible ChatGPT window

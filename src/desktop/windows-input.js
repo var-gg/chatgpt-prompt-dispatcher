@@ -1,22 +1,44 @@
-import { execPowerShell } from './powershell.js';
+import { getDesktopWorkerClient } from './worker-client.js';
 
-function q(value) {
-  return String(value).replace(/'/g, "''");
+async function invokeDesktop(method, params, step) {
+  const client = await getDesktopWorkerClient();
+  return client.invoke(method, params, { step });
+}
+
+export async function listChromeWindows() {
+  return invokeDesktop('listChromeWindows', {}, 'desktop-list-chrome-windows');
 }
 
 export async function focusWindowByTitle(titleHint) {
-  const script = `Add-Type -AssemblyName Microsoft.VisualBasic; Add-Type -AssemblyName System.Windows.Forms; $ws = New-Object -ComObject WScript.Shell; $null = $ws.AppActivate('${q(titleHint)}'); Start-Sleep -Milliseconds 150; Write-Output '{"ok":true}'`;
-  return execPowerShell(script, { step: 'desktop-focus-window', json: true });
+  return invokeDesktop('focusWindow', { titleHint }, 'desktop-focus-window');
+}
+
+export async function focusWindow(params) {
+  return invokeDesktop('focusWindow', params, 'desktop-focus-window');
+}
+
+export async function moveResizeWindow(params) {
+  return invokeDesktop('moveResizeWindow', params, 'desktop-move-resize-window');
+}
+
+export async function getWindowRect(params) {
+  return invokeDesktop('getWindowRect', params, 'desktop-get-window-rect');
+}
+
+export async function getForegroundWindow() {
+  return invokeDesktop('getForegroundWindow', {}, 'desktop-get-foreground-window');
 }
 
 export async function setClipboardText(text) {
-  const script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::SetText(@'\n${text}\n'@); Write-Output '{"ok":true}'`;
-  return execPowerShell(script, { step: 'desktop-set-clipboard', json: true });
+  return invokeDesktop('setClipboard', { text }, 'desktop-set-clipboard');
+}
+
+export async function getClipboardText() {
+  return invokeDesktop('getClipboard', {}, 'desktop-get-clipboard');
 }
 
 export async function sendKeys(keys) {
-  const script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${q(keys)}'); Write-Output '{"ok":true}'`;
-  return execPowerShell(script, { step: 'desktop-send-keys', json: true });
+  return invokeDesktop('sendKeys', { keys }, 'desktop-send-keys');
 }
 
 export async function pasteClipboard() {
@@ -28,27 +50,40 @@ export async function pressEnter() {
 }
 
 export async function resizeWindow(targetBounds) {
-  const script = `$sig = @'
-using System;
-using System.Runtime.InteropServices;
-public static class Win32 {
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
-}
-'@; Add-Type $sig; $h = [Win32]::GetForegroundWindow(); [Win32]::MoveWindow($h, ${Math.round(targetBounds.x)}, ${Math.round(targetBounds.y)}, ${Math.round(targetBounds.width)}, ${Math.round(targetBounds.height)}, $true) | Out-Null; Write-Output '{"ok":true}'`;
-  return execPowerShell(script, { step: 'desktop-resize-window', json: true });
+  const foreground = await getForegroundWindow();
+  return moveResizeWindow({ hwnd: foreground.hwnd, ...targetBounds });
 }
 
 export async function clickPoint(point) {
-  const script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${Math.round(point.x)}, ${Math.round(point.y)}); Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public static class Mouse {
-  [DllImport("user32.dll", CharSet=CharSet.Auto, CallingConvention=CallingConvention.StdCall)]
-  public static extern void mouse_event(long dwFlags, long dx, long dy, long cButtons, long dwExtraInfo);
+  return invokeDesktop('click', { x: Math.round(point.x), y: Math.round(point.y) }, 'desktop-click-point');
 }
-'@; [Mouse]::mouse_event(0x0002,0,0,0,0); [Mouse]::mouse_event(0x0004,0,0,0,0); Write-Output '{"ok":true}'`;
-  return execPowerShell(script, { step: 'desktop-click-point', json: true });
+
+export async function doubleClickPoint(point) {
+  return invokeDesktop('doubleClick', { x: Math.round(point.x), y: Math.round(point.y) }, 'desktop-double-click-point');
+}
+
+export async function rightClickPoint(point) {
+  return invokeDesktop('rightClick', { x: Math.round(point.x), y: Math.round(point.y) }, 'desktop-right-click-point');
+}
+
+export async function getUrlViaOmnibox(params = {}) {
+  return invokeDesktop('getUrlViaOmnibox', params, 'desktop-get-url-via-omnibox');
+}
+
+export async function uiaQueryByNameRole(params) {
+  return invokeDesktop('uiaQueryByNameRole', params, 'desktop-uia-query-by-name-role');
+}
+
+export async function uiaGetFocusedElement() {
+  return invokeDesktop('uiaGetFocusedElement', {}, 'desktop-uia-get-focused-element');
+}
+
+export async function waitForWindow(params) {
+  return invokeDesktop('waitForWindow', params, 'desktop-wait-for-window');
+}
+
+export async function waitForElement(params) {
+  return invokeDesktop('waitForElement', params, 'desktop-wait-for-element');
 }
 
 export async function delay(ms) {

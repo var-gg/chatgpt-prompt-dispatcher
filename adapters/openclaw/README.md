@@ -1,10 +1,15 @@
 # OpenClaw adapter
 
-This adapter exposes the repo as a desktop-first ChatGPT prompt submission runtime for OpenClaw.
+This adapter exposes a desktop-backed ChatGPT prompt submission runtime for OpenClaw.
 
 ## Primary transport
 
-- `submit-chatgpt` → Windows desktop input dispatcher backed by a visible ChatGPT window
+- `submit-chatgpt` → Windows desktop input dispatcher backed by a visible ChatGPT window and persistent PowerShell worker
+
+## Diagnostics
+
+- `inspect-desktop-chatgpt`
+- `calibrate-desktop-chatgpt`
 
 ## Compatibility transport
 
@@ -16,3 +21,4 @@ This adapter exposes the repo as a desktop-first ChatGPT prompt submission runti
 - submit prepared prompts only
 - return receipt JSON only
 - do not read or scrape assistant responses
+- same-user unlocked desktop session required

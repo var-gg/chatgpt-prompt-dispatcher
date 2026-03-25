@@ -1,6 +1,6 @@
 ---
 name: chatgpt-web-submit
-description: Submit prepared prompts into a locally logged-in ChatGPT web session on Windows through a Windows desktop input dispatcher backed by a visible ChatGPT window. Use when the task is only to submit a prepared prompt and receive a receipt JSON. Use the retained browser transport only when project entry, attachments, or browser-side mode selection are still required. Do not use when the task requires reading replies, scraping responses, calling unofficial APIs, automating login, extracting cookies/tokens/session data, or interacting with hidden/internal endpoints.
+description: Submit prepared prompts into a locally logged-in ChatGPT web session on Windows through a desktop-backed runtime with a persistent PowerShell worker and calibrated/UIA-guided controls. Use when the task is only to submit a prepared prompt and receive a receipt JSON. Use the retained browser transport only when project entry, attachments, or browser-side mode selection are still required. Do not use when the task requires reading replies, scraping responses, calling unofficial APIs, automating login, extracting cookies/tokens/session data, or interacting with hidden/internal endpoints.
 ---
 
 # chatgpt-web-submit
@@ -18,25 +18,26 @@ It does **not**:
 - automate login
 - export or inspect cookies, tokens, or browser session storage
 
+## Prerequisites
+
+- unlocked local Windows desktop session
+- same user session for runtime + Chrome/Edge window
+- non-elevated browser + non-elevated dispatcher runtime
+- clipboard save/restore available
+- no response scraping
+- screenshot only on failure if explicitly added by a caller workflow
+
 ## Use This Skill When
 
 - You already have a local logged-in ChatGPT session.
 - You want desktop-first prompt submission on Windows.
 - You need a submission receipt JSON instead of model output.
-- You only need the browser transport for compatibility features such as project entry or attachments.
-
-## Do Not Use This Skill When
-
-- You need the model's answer text.
-- You need response scraping, DOM extraction, or transcript capture.
-- You need API-style ChatGPT access.
-- The user is not logged in and expects the agent to log in for them.
-- The task depends on cookie reuse, account export, token capture, or hidden browser/session inspection.
+- You can recalibrate or inspect the desktop flow when UI drift happens.
 
 ## Runtime Model
 
-- Repository root = source of truth
-- `skill/` = portable install bundle
+- repository root = source of truth during development
+- packaged bundle = self-contained installable runtime
 - runtime state = separate, outside the portable bundle
 
 ## References
@@ -45,12 +46,10 @@ Read as needed:
 - `references/install.md` for packaging/install/materialization
 - `references/profiles.md` for adding locale/platform/tier profiles
 - `references/known-limitations.md` for current boundaries and expected drift
-- `../docs/desktop-first-architecture.md` in the repo root for transport strategy
 
 ## Execution Notes
 
 - Prefer `submit-chatgpt` / `npm run submit -- ...`.
 - Treat `submit-browser-chatgpt` / `--transport=browser` as experimental compatibility paths.
+- Use `inspect-desktop-chatgpt` and `calibrate-desktop-chatgpt` before reaching for browser fallback when the desktop UI drifts.
 - Return the submission receipt JSON only.
-- If login is missing for browser warmup/transport, wait for manual login through the visible browser UI.
-- Preserve screenshots/logs in runtime artifacts, not in the bundle.

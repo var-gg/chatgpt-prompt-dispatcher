@@ -2,7 +2,14 @@ import { access, cp, lstat, mkdir, readFile, rm, symlink, writeFile } from 'node
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
-import { bundleSkillRoot, defaultInstallTarget, expandHome, repoRoot, resolveBundleRuntimeEntry } from './bundle-layout.js';
+import {
+  bundleSkillRoot,
+  defaultInstallTarget,
+  expandHome,
+  repoRoot,
+  resolveBundleRuntimeEntry,
+  isBundleRuntime
+} from './bundle-layout.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -13,12 +20,12 @@ async function main(argv = process.argv.slice(2)) {
   await materializeBundle(target, options.mode);
   await installRuntimeDeps(target);
 
-  const commitSha = await getCommitSha();
+  const packageJson = JSON.parse(await readFile(path.join(bundleSkillRoot, 'runtime', 'package.json'), 'utf8'));
+  const existingLock = await readInstallLockSafe();
   const runtimeEntry = resolveBundleRuntimeEntry(target);
-  const packageJson = JSON.parse(await readFile(path.join(repoRoot, 'package.json'), 'utf8'));
   const lock = {
     version: packageJson.version,
-    commitSha,
+    commitSha: existingLock?.commitSha || 'unknown',
     profile: options.profile,
     installedPath: target,
     installMode: options.mode,
@@ -26,7 +33,9 @@ async function main(argv = process.argv.slice(2)) {
     runtimeEntry
   };
 
-  await writeFile(path.join(repoRoot, 'skill.install.lock.json'), JSON.stringify(lock, null, 2) + '\n');
+  if (!isBundleRuntime) {
+    await writeFile(path.join(repoRoot, 'skill.install.lock.json'), JSON.stringify(lock, null, 2) + '\n');
+  }
   await writeFile(path.join(target, 'skill.install.lock.json'), JSON.stringify(lock, null, 2) + '\n');
 
   const statInfo = await lstat(target);
@@ -36,8 +45,9 @@ async function main(argv = process.argv.slice(2)) {
     mode: options.mode,
     profile: options.profile,
     isSymlink: statInfo.isSymbolicLink(),
-    commitSha,
-    runtimeEntry
+    commitSha: lock.commitSha,
+    runtimeEntry,
+    sourceBundle: bundleSkillRoot
   }, null, 2));
 }
 
@@ -57,6 +67,9 @@ async function ensureBundleBuilt() {
   try {
     await access(bundleSkillRoot);
   } catch {
+    if (isBundleRuntime) {
+      throw new Error(`Bundle root not found: ${bundleSkillRoot}`);
+    }
     await execFileAsync(process.execPath, ['src/pack-skill.js'], { cwd: repoRoot });
   }
 }
@@ -68,6 +81,15 @@ async function installRuntimeDeps(target) {
     return;
   }
   await execFileAsync('npm', ['install', '--omit=dev'], { cwd: runtimeDir });
+}
+
+async function readInstallLockSafe() {
+  try {
+    const raw = await readFile(path.join(bundleSkillRoot, 'skill.install.lock.json'), 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 function parseArgs(argv) {
@@ -85,12 +107,7 @@ function parseArgs(argv) {
   return options;
 }
 
-async function getCommitSha() {
-  const { stdout } = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], { cwd: repoRoot });
-  return stdout.trim();
-}
-
 main().catch((error) => {
-  console.error(error);
+  console.error(error?.message || error);
   process.exitCode = 1;
 });

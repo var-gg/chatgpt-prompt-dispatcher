@@ -1,14 +1,17 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defaultInstallTarget } from './bundle-layout.js';
+import { defaultInstallTarget, isBundleRuntime, repoRoot } from './bundle-layout.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, '..');
 
 async function main(argv = process.argv.slice(2)) {
-  const args = ['src/install-local.js', '--mode', 'copy', '--target', defaultInstallTarget, ...argv];
-  const result = await run(process.execPath, args, repoRoot);
+  const installEntry = isBundleRuntime
+    ? path.join(__dirname, 'install-local.js')
+    : path.join(repoRoot, 'src', 'install-local.js');
+
+  const args = [installEntry, '--mode', 'copy', '--target', defaultInstallTarget, ...argv];
+  const result = await run(process.execPath, args, isBundleRuntime ? path.join(repoRoot, 'runtime') : repoRoot);
   console.log(JSON.stringify({
     registered: true,
     target: defaultInstallTarget,

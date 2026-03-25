@@ -2,17 +2,28 @@
 
 `chatgpt-prompt-dispatcher` is an unofficial, local-only tool for submitting prepared prompts into a locally logged-in ChatGPT web session on Windows.
 
-The repo is now **desktop-first**:
+The repo is **desktop-first**:
 - default path = Windows desktop input dispatcher backed by a calibrated visible ChatGPT window
 - retained fallback = Playwright browser transport for compatibility / experimental use
+- packaged skill id remains `chatgpt-web-submit`
+
+## Prerequisites
+
+- unlocked local Windows desktop session
+- same user session for the Node runtime, PowerShell worker, and visible Chrome window
+- non-elevated Chrome / Edge and non-elevated dispatcher runtime in the same desktop integrity level
+- clipboard save/restore must be allowed
+- no response scraping
+- screenshots are not part of normal flow; allow only failure-only capture if you add that later
 
 ## Purpose
 
 - Focus a visible local ChatGPT window.
+- Validate or repair navigation to `https://chatgpt.com/`.
 - Paste a prepared prompt through Windows desktop input dispatch.
-- Optionally submit through click or Enter.
+- Validate prompt input deterministically.
+- Optionally submit through Enter-first / send-button fallback.
 - Return a submission receipt JSON instead of response content.
-- Keep the browser transport available behind an explicit experimental command.
 
 ## Non-Goals
 
@@ -39,33 +50,13 @@ Forbidden:
 - browser storage extraction
 - token/cookie/session export
 
-## Supported Environment
-
-- Korean Windows first (`ko-KR.windows.*` profiles)
-- ChatGPT Pro UI first
-- ChatGPT Plus fallback supported through a separate profile
-- local browser session only
-
-## Discoverable vs Runnable
-
-**Discoverable** means OpenClaw can find the skill because a scanned directory contains a top-level `SKILL.md`.
-
-**Runnable** means the installed bundle also contains everything needed to execute:
-- `profiles/`
-- `adapters/`
-- `runtime/`
-- `bundle.manifest.json`
-- `skill.install.lock.json`
-
-This repo materializes a self-contained bundle so the installed skill can be both discoverable and runnable.
-
 ## Primary transport: desktop
 
 Default command:
 
 ```bash
 npm run submit -- --prompt "안녕하세요" --dry-run
-npm run submit -- --prompt-file .\prompt.txt --calibration-profile default --window-title "ChatGPT" --submit-method click
+npm run submit -- --prompt-file .\prompt.txt --calibration-profile default --window-title "ChatGPT"
 ```
 
 Explicit desktop alias:
@@ -74,29 +65,31 @@ Explicit desktop alias:
 npm run submit-desktop -- --prompt "안녕하세요" --dry-run
 ```
 
-Desktop transport currently:
-- focuses a visible window by title hint
-- resizes it toward a standardized rectangle from the calibration profile
-- clicks the calibrated prompt box point
-- pastes via clipboard
-- optionally submits by click or Enter
-- returns receipt JSON only
+Fallback order:
+- UIA
+- keyboard shortcut / omnibox trick
+- calibrated coordinates
 
-Current desktop limitations:
-- no project navigation yet
-- no attachment upload yet
-- no browser-side mode selection beyond the default path
-- no response reading or scraping
+## Calibration + inspection
 
-If you need project entry, attachments, or browser-side mode selection, use the experimental browser path.
+Interactive calibration:
+
+```bash
+npm run calibrate-desktop -- --calibration-profile default --window-title "ChatGPT"
+```
+
+Inspection / diagnostics:
+
+```bash
+npm run inspect-desktop -- --depth 1
+```
+
+These commands are the intended answer to UI drift in MVP. OCR / vision fallback is intentionally out of scope.
 
 ## Experimental browser transport
 
-Explicit command:
-
 ```bash
 npm run submit-browser -- --prompt "안녕하세요" --profile ko-KR.windows.pro --dry-run
-npm run submit-browser -- --prompt-file .\prompt.txt --project "Example Project" --mode thinking --attachment .\sample.txt --profile ko-KR.windows.pro --dry-run
 npm run submit -- --transport=browser --prompt "안녕하세요" --profile ko-KR.windows.pro --dry-run
 ```
 
@@ -106,57 +99,15 @@ Browser transport status:
 - non-primary
 - experimental
 
-## Warmup command
-
-```bash
-npm run warmup -- --profile ko-KR.windows.pro --browser-profile-dir .\.tmp\warmup-profile
-```
-
-Use warmup when you need to open ChatGPT in a visible browser and complete manual login/captcha before using the experimental browser transport.
-
-## Core commands
-
-```bash
-npm install
-npm test
-npm run pack-skill
-npm run register-openclaw
-npm run submit -- --prompt "안녕하세요" --dry-run
-npm run submit-browser -- --prompt "안녕하세요" --profile ko-KR.windows.pro --dry-run
-npm run install-local -- --mode copy --target .\.tmp\local-skill-install --profile ko-KR.windows.pro
-```
-
-## Dry-Run vs Live
-
-### Dry-Run
-- runs the selected transport up to the pre-submit point
-- returns a receipt JSON
-- does **not** execute final submission
-
-### Live
-- runs the selected transport end-to-end
-- performs prompt submission
-- returns a receipt JSON afterward
-
-Both modes keep the contract limited to prompt submission receipts.
-
 ## Testing Strategy
 
-### Unit Tests
+### Unit tests
 
 ```bash
 npm test
 ```
 
-Covers:
-- argument parsing
-- transport routing
-- profile interpretation
-- receipt generation
-- smoke gating
-- candidate ordering
-
-### Live Smoke
+### Live smoke
 
 Live smoke remains opt-in and is scoped to the **experimental browser transport**.
 
@@ -165,31 +116,42 @@ LIVE_CHATGPT=1 npm run smoke -- A --profile ko-KR.windows.pro --browser-profile-
 LIVE_CHATGPT=1 npm run smoke -- B --profile ko-KR.windows.pro --project "Example Project" --mode auto --browser-profile-dir .\.tmp\smoke-profile-b
 ```
 
-If a live smoke fails, stdout includes:
-- full receipt JSON
-- `screenshotPath`
-- `failureArtifacts.logPath`
-- `failureArtifacts.lastStep`
-
 Without `LIVE_CHATGPT=1`, smoke exits with a skip message.
 
 ## Packaging and Installation
 
-### Build Shareable Skill Bundle
+### Build bundle
 
 ```bash
 npm run pack-skill
 ```
 
 Outputs:
-- `dist/skill-bundle/`
+- `dist/skill-bundle/chatgpt-web-submit/`
 - `dist/chatgpt-web-submit-bundle.zip`
 
-### Install Into OpenClaw Skill Path
+Bundle contents include:
+- desktop worker
+- Node client/runtime
+- profiles
+- adapters
+- skill metadata
+- install/register scripts
+
+### Install into OpenClaw
+
+From repo:
 
 ```bash
 npm run install-local -- --target ~/.openclaw/skills/chatgpt-web-submit --mode copy
 npm run register-openclaw
+```
+
+From installed bundle only:
+
+```bash
+node scripts/install-local.js --target ~/.openclaw/skills/chatgpt-web-submit --mode copy
+node scripts/register-openclaw.js
 ```
 
 ## Repo layout
@@ -203,4 +165,3 @@ npm run register-openclaw
 ## Architecture reference
 
 See `docs/desktop-first-architecture.md`.
-cture.md`.

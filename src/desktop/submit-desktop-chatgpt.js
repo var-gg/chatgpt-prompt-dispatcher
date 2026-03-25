@@ -205,7 +205,7 @@ export async function submitDesktopChatgpt(argv = []) {
     }
 
     lastStep = 'submit-prompt';
-    const submitResult = await submitPrompt(selectedWindow.handle, submitPoint, args.stepDelayMs, args.prompt);
+    const submitResult = await submitPrompt(selectedWindow.handle, submitPoint, args.stepDelayMs, args.prompt, promptFocus);
     await writeJsonlLog(logPath, { step: lastStep, submitResult });
     notes.push(`submitMethod=${submitResult.method}`);
     if (submitResult.proof) {
@@ -824,8 +824,9 @@ function looksLikeComposerElement(element) {
     || haystack.includes('메시지');
 }
 
-async function submitPrompt(handle, submitPoint, stepDelayMs, prompt) {
-  const before = await collectSubmitEvidence(handle, prompt).catch(() => ({ stage: 'before', composerText: '', submitButton: null, stopButton: null }));
+async function submitPrompt(handle, submitPoint, stepDelayMs, prompt, promptFocus) {
+  const ready = await verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs);
+  const before = ready.sample;
   let method = 'enter';
   try {
     await pressEnter();
@@ -864,9 +865,7 @@ async function submitPrompt(handle, submitPoint, stepDelayMs, prompt) {
 
 async function collectSubmitEvidence(handle, prompt) {
   const composer = await readComposerProof(handle).catch(() => ({ text: '', element: null, focusedElement: null }));
-  const submitButton = await uiaQuery({ handle }, { automationId: 'composer-submit-btn', timeoutMs: 700 })
-    .then((result) => result.element)
-    .catch(() => null);
+  const submitButton = await findSubmitButton(handle);
   const stopButton = await findStopButton(handle);
   return {
     stage: 'sample',
@@ -875,8 +874,52 @@ async function collectSubmitEvidence(handle, prompt) {
     composerElement: composer.element,
     focusedElement: composer.focusedElement,
     submitButton,
-    stopButton
+    stopButton,
+    submitButtonEnabled: isElementEnabled(submitButton),
+    stopButtonEnabled: isElementEnabled(stopButton)
   };
+}
+
+async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs) {
+  const currentUrlAfterValidation = await readCurrentUrl(handle).catch(() => CHATGPT_URL);
+  return waitForCondition({
+    step: 'submit-prompt-precheck',
+    attempts: 5,
+    delayMs: stepDelayMs,
+    verify: async () => {
+      const proof = await readComposerProof(handle);
+      const submitButton = await findSubmitButton(handle);
+      ensurePromptTargetLooksCredible({
+        promptFocus,
+        focusedElement: proof.focusedElement,
+        currentUrlAfterValidation,
+        prompt,
+        actualHash: hashText(proof.text)
+      });
+      const promptPresent = normalizeComposerText(proof.text).includes(prompt);
+      const sendable = isSendableSubmitState(submitButton);
+      const sample = {
+        stage: 'before',
+        prompt,
+        composerText: normalizeComposerText(proof.text),
+        composerElement: proof.element,
+        focusedElement: proof.focusedElement,
+        submitButton,
+        stopButton: null,
+        submitButtonEnabled: isElementEnabled(submitButton),
+        stopButtonEnabled: false
+      };
+      return {
+        ok: promptPresent && sendable,
+        proof: promptPresent
+          ? (sendable ? 'composerContainsPromptAndSendable' : 'composerContainsPromptButNotSendable')
+          : 'composerMissingExpectedPrompt',
+        sample
+      };
+    },
+    failureCode: 'SUBMIT_PRECHECK_FAILED',
+    failureMessage: 'Prompt was not visibly present in the ChatGPT composer in a sendable state before submit.'
+  });
 }
 
 async function waitForSubmitEvidence(handle, prompt, before, stepDelayMs) {
@@ -904,16 +947,31 @@ function deriveSubmitProof(before, after, prompt) {
   const beforeText = normalizeComposerText(before?.composerText || '');
   const afterText = normalizeComposerText(after?.composerText || '');
   const stopAppeared = Boolean(after?.stopButton);
-  const submitButtonChanged = Boolean(before?.submitButton?.name || after?.submitButton?.name)
-    && String(before?.submitButton?.name || '') !== String(after?.submitButton?.name || '');
-  const composerCleared = !afterText || !afterText.includes(prompt);
-  const composerChanged = beforeText !== afterText;
+  const beforeSignature = elementSignature(before?.submitButton);
+  const afterSignature = elementSignature(after?.submitButton);
+  const submitButtonChanged = Boolean(beforeSignature || afterSignature) && beforeSignature !== afterSignature;
+  const sendabilityChanged = isSendableSubmitState(before?.submitButton) !== isSendableSubmitState(after?.submitButton);
+  const composerCleared = Boolean(beforeText) && (!afterText || !afterText.includes(prompt));
 
   if (stopAppeared) return 'stopButtonAppeared';
   if (submitButtonChanged) return 'submitButtonStateChanged';
-  if (composerCleared) return 'composerClearedOrChangedAfterSubmit';
-  if (composerChanged) return 'composerTextChangedAfterSubmit';
+  if (sendabilityChanged) return 'submitButtonSendabilityChanged';
+  if (composerCleared) return 'composerClearedOrPromptGoneAfterSubmit';
   return 'submitUnprovenComposerStillContainsPrompt';
+}
+
+async function findSubmitButton(handle) {
+  const candidates = [
+    { automationId: 'composer-submit-btn', timeoutMs: 700 },
+    { name: 'Send', role: 'Button', timeoutMs: 700 },
+    { name: '보내기', role: 'Button', timeoutMs: 700 }
+  ];
+
+  for (const candidate of candidates) {
+    const element = await uiaQuery({ handle }, candidate).then((result) => result.element).catch(() => null);
+    if (element) return element;
+  }
+  return null;
 }
 
 async function findStopButton(handle) {
@@ -940,6 +998,42 @@ function looksLikeStopButton(element) {
     .join(' ')
     .toLowerCase();
   return haystack.includes('stop') || haystack.includes('중지');
+}
+
+function isElementEnabled(element) {
+  if (!element) return false;
+  for (const key of ['isEnabled', 'enabled', 'hasKeyboardFocus']) {
+    if (typeof element?.[key] === 'boolean') {
+      if (key === 'hasKeyboardFocus') continue;
+      return element[key];
+    }
+  }
+  const haystack = [element?.name, element?.role, element?.controlType, element?.automationId, element?.className]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (haystack.includes('disabled') || haystack.includes('비활성')) return false;
+  return true;
+}
+
+function isSendableSubmitState(element) {
+  if (!element) return false;
+  if (looksLikeStopButton(element)) return false;
+  return isElementEnabled(element);
+}
+
+function elementSignature(element) {
+  if (!element) return '';
+  return JSON.stringify({
+    name: element.name || '',
+    role: element.role || '',
+    controlType: element.controlType || '',
+    automationId: element.automationId || '',
+    className: element.className || '',
+    isEnabled: typeof element.isEnabled === 'boolean' ? element.isEnabled : null,
+    enabled: typeof element.enabled === 'boolean' ? element.enabled : null,
+    hasKeyboardFocus: typeof element.hasKeyboardFocus === 'boolean' ? element.hasKeyboardFocus : null
+  });
 }
 
 function looksLikePromptEcho(currentUrlAfterValidation, prompt) {

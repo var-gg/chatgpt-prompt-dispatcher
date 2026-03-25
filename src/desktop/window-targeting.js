@@ -22,25 +22,30 @@ export function isChatGptTitle(title, titleHint = '') {
 }
 
 export function scoreWindowTargetEvidence(candidate, titleHint = '') {
-  const titleMatched = isChatGptTitle(candidate?.window?.title, titleHint);
+  const windowTitle = String(candidate?.window?.title || '');
+  const titleMatched = isChatGptTitle(windowTitle, titleHint);
   const urlMatched = isChatGptUrl(candidate?.url);
   const composerMatched = Boolean(candidate?.composerElement);
+  const exactChatGptShell = isExactChatGptShellTitle(windowTitle);
 
   const reasons = [];
   if (titleMatched) reasons.push('title');
   if (urlMatched) reasons.push('url');
   if (composerMatched) reasons.push('composer');
+  if (exactChatGptShell) reasons.push('exact-chatgpt-shell');
 
   let score = 0;
   if (composerMatched) score += 100;
   if (urlMatched) score += 80;
   if (titleMatched) score += 30;
+  if (exactChatGptShell) score += 120;
 
   return {
     ...candidate,
     titleMatched,
     urlMatched,
     composerMatched,
+    exactChatGptShell,
     credible: score > 0,
     score,
     reasons
@@ -155,9 +160,17 @@ function pickFallbackBrowserWindow(windows, titleHint = '') {
   return scored[0]?.window || null;
 }
 
+function isExactChatGptShellTitle(title) {
+  const normalized = String(title || '').trim().toLowerCase();
+  return normalized === 'chatgpt - chrome'
+    || normalized === 'chatgpt - google chrome'
+    || normalized === 'chatgpt - microsoft edge';
+}
+
 export const __windowTargetingInternals = {
   isChatGptUrl,
   isChatGptTitle,
+  isExactChatGptShellTitle,
   scoreWindowTargetEvidence,
   pickBestCredibleWindowCandidate,
   pickFallbackBrowserWindow

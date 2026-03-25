@@ -130,7 +130,13 @@ test('deriveSubmitProof prefers strong post-submit UI signals', () => {
     { composerText: 'hello', submitButton: { name: 'Send' }, stopButton: null },
     { composerText: '', submitButton: { name: 'Send' }, stopButton: null },
     'hello'
-  ), 'composerClearedOrChangedAfterSubmit');
+  ), 'composerClearedOrPromptGoneAfterSubmit');
+
+  assert.equal(deriveSubmitProof(
+    { composerText: 'hello', submitButton: { name: 'Send', isEnabled: true }, stopButton: null },
+    { composerText: 'hello', submitButton: { name: 'Send', isEnabled: false }, stopButton: null },
+    'hello'
+  ), 'submitButtonStateChanged');
 });
 
 test('normalizeAddressValue canonicalizes chatgpt URLs for omnibox verification', () => {

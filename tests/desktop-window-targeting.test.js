@@ -5,6 +5,7 @@ import { __windowTargetingInternals } from '../src/desktop/window-targeting.js';
 const {
   isChatGptUrl,
   isChatGptTitle,
+  isExactChatGptShellTitle,
   scoreWindowTargetEvidence,
   pickBestCredibleWindowCandidate,
   pickFallbackBrowserWindow
@@ -22,6 +23,12 @@ test('isChatGptTitle recognizes explicit title hints and chatgpt titles', () => 
   assert.equal(isChatGptTitle('ChatGPT - Google Chrome', 'ChatGPT'), true);
   assert.equal(isChatGptTitle('New chat - ChatGPT', ''), true);
   assert.equal(isChatGptTitle('Docs - Google Chrome', 'ChatGPT'), false);
+});
+
+test('isExactChatGptShellTitle detects generic ChatGPT browser shell windows', () => {
+  assert.equal(isExactChatGptShellTitle('ChatGPT - Chrome'), true);
+  assert.equal(isExactChatGptShellTitle('ChatGPT - Google Chrome'), true);
+  assert.equal(isExactChatGptShellTitle('Notes mentioning chatgpt - Chrome'), false);
 });
 
 test('scoreWindowTargetEvidence does not treat omnibox echo as credible url evidence', () => {
@@ -53,6 +60,24 @@ test('pickBestCredibleWindowCandidate prefers composer/url evidence over title-o
   assert.equal(scored.length, 2);
   assert.equal(winner.window.handle, 2);
   assert.deepEqual(winner.reasons, ['url', 'composer']);
+});
+
+test('pickBestCredibleWindowCandidate prefers exact ChatGPT shell over unrelated titles that only mention chatgpt', () => {
+  const { winner } = pickBestCredibleWindowCandidate([
+    {
+      window: { handle: 1, title: 'var-gg/chatgpt-prompt-dispatcher docs - Chrome' },
+      url: 'https://chatgpt.com/',
+      composerElement: null
+    },
+    {
+      window: { handle: 2, title: 'ChatGPT - Chrome' },
+      url: 'https://chatgpt.com/',
+      composerElement: null
+    }
+  ], 'ChatGPT');
+
+  assert.equal(winner.window.handle, 2);
+  assert.equal(winner.exactChatGptShell, true);
 });
 
 test('pickBestCredibleWindowCandidate rejects generic chrome windows when no credible evidence exists', () => {

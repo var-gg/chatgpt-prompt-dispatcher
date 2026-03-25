@@ -332,6 +332,8 @@ function Invoke-Method($method, $params) {
           '^v$' { Send-KeyInput 0x56; Send-KeyInput 0x56 $true }
           '^c$' { Send-KeyInput 0x43; Send-KeyInput 0x43 $true }
           '^l$' { Send-KeyInput 0x4C; Send-KeyInput 0x4C $true }
+          '^a$' { Send-KeyInput 0x41; Send-KeyInput 0x41 $true }
+          '^0$' { Send-KeyInput 0x30; Send-KeyInput 0x30 $true }
           default { throw (New-ErrorResult 'UNSUPPORTED_KEY' "Unsupported key: $($params.key)") }
         }
         for ($i = $mods.Count - 1; $i -ge 0; $i--) {

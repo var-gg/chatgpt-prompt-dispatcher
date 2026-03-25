@@ -10,10 +10,8 @@ import {
   delay,
   focusWindow,
   getClipboardText,
-  getForegroundWindow,
   getUrlViaOmnibox,
   getWindowRect,
-  listChromeWindows,
   pasteClipboard,
   pressEnter,
   resizeWindow,
@@ -25,6 +23,7 @@ import {
   uiaReadText,
   uiaSetFocus
 } from './windows-input.js';
+import { chooseVerifiedChatGptWindow, isChatGptUrl } from './window-targeting.js';
 
 const CHATGPT_URL = 'https://chatgpt.com/';
 const CHATGPT_HOST = 'chatgpt.com';
@@ -108,11 +107,15 @@ export async function submitDesktopChatgpt(argv = []) {
     }
 
     lastStep = 'select-window';
-    const selectedWindow = await chooseChromeWindow(titleHint);
+    const windowSelection = await chooseVerifiedChatGptWindow(titleHint);
+    const selectedWindow = windowSelection.selectedWindow;
     lastWindow = selectedWindow;
     notes.push(`windowHandle=${selectedWindow.handle}`);
     notes.push(`windowTitle=${selectedWindow.title}`);
-    await writeJsonlLog(logPath, { step: lastStep, selectedWindow });
+    if (windowSelection.evidence?.reasons?.length) {
+      notes.push(`targetEvidence=${windowSelection.evidence.reasons.join('+')}`);
+    }
+    await writeJsonlLog(logPath, { step: lastStep, selectedWindow, targetEvidence: windowSelection.evidence, candidates: windowSelection.candidates });
 
     lastStep = 'focus-window';
     await focusWindow(selectedWindow.handle);
@@ -124,10 +127,6 @@ export async function submitDesktopChatgpt(argv = []) {
     await delay(args.stepDelayMs);
     lastWindow = (await getWindowRect(selectedWindow.handle)).window;
     await writeJsonlLog(logPath, { step: lastStep, window: lastWindow });
-
-    lastStep = 'open-fresh-tab';
-    await openFreshTab(args.stepDelayMs);
-    await writeJsonlLog(logPath, { step: lastStep });
 
     lastStep = 'navigate-chatgpt';
     await navigateToChatGpt(CHATGPT_URL, args.stepDelayMs);
@@ -241,54 +240,9 @@ export async function submitDesktopChatgpt(argv = []) {
   }
 }
 
-async function chooseChromeWindow(titleHint) {
-  const windows = await listChromeWindows();
-  if (!windows.length) {
-    throw new StepError('WINDOW_NOT_FOUND', 'select-window', 'No visible Chrome/Edge top-level window found.');
-  }
-
-  const foreground = await getForegroundWindow().catch(() => null);
-  const foregroundHandle = foreground?.window?.handle || null;
-  const byHandle = new Map(windows.map((window) => [window.handle, window]));
-  if (foregroundHandle && byHandle.has(foregroundHandle)) {
-    return byHandle.get(foregroundHandle);
-  }
-
-  const titlePreferred = windows.find((window) => String(window.title || '').includes(titleHint))
-    || windows.find((window) => String(window.title || '').toLowerCase().includes('chatgpt'));
-  if (titlePreferred) {
-    return titlePreferred;
-  }
-
-  for (const window of windows) {
-    const url = await readCurrentUrl(window.handle).catch(() => '');
-    if (isChatGptUrl(url)) {
-      return window;
-    }
-  }
-
-  return foregroundHandle && byHandle.has(foregroundHandle)
-    ? byHandle.get(foregroundHandle)
-    : windows[0];
-}
-
 async function readCurrentUrl(handle) {
   const result = await getUrlViaOmnibox({ handle });
   return String(result.url || '').trim();
-}
-
-function isChatGptUrl(url) {
-  try {
-    const parsed = new URL(url);
-    return parsed.hostname === CHATGPT_HOST || parsed.hostname.endsWith(`.${CHATGPT_HOST}`);
-  } catch {
-    return false;
-  }
-}
-
-async function openFreshTab(stepDelayMs) {
-  await sendKeys('t', ['ctrl']);
-  await delay(stepDelayMs * 2);
 }
 
 async function navigateToChatGpt(targetUrl, stepDelayMs) {

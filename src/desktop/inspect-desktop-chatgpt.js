@@ -1,14 +1,13 @@
 import { defaultLogPath, writeJsonlLog } from '../logger.js';
 import {
-  listChromeWindows,
   getForegroundWindow,
-  getUrlViaOmnibox,
   getWindowRect,
   uiaGetFocusedElement,
   uiaQueryByNameRole,
   waitForWindow
 } from './windows-input.js';
 import { getDesktopWorkerClient, shutdownDesktopWorker } from './powershell.js';
+import { chooseVerifiedChatGptWindow } from './window-targeting.js';
 
 export async function inspectDesktopChatgpt(argv = []) {
   const options = parseInspectArgs(argv);
@@ -16,16 +15,18 @@ export async function inspectDesktopChatgpt(argv = []) {
 
   try {
     const foreground = await getForegroundWindow().catch((error) => ({ error: { code: error.code, message: error.message } }));
-    const chromeWindows = await listChromeWindows();
-    const target = pickWindow(chromeWindows, options.windowTitle);
-    if (!target) {
-      const result = { ok: false, error: { code: 'WINDOW_NOT_FOUND', message: 'No visible Chrome window found.' }, foreground, chromeWindows };
+    let selection;
+    try {
+      selection = await chooseVerifiedChatGptWindow(options.windowTitle);
+    } catch (error) {
+      const result = { ok: false, error: { code: error.code || 'CHATGPT_TARGET_NOT_FOUND', message: error.message, details: error.details || null }, foreground };
       await writeJsonlLog(logPath, { step: 'inspect-failure', result });
       return result;
     }
+    const target = selection.selectedWindow;
 
     await waitForWindow({ handle: target.handle }, 1000).catch(() => null);
-    const url = await getUrlViaOmnibox({ handle: target.handle }).catch((error) => ({ error: { code: error.code, message: error.message } }));
+    const url = selection.evidence?.url ? { url: selection.evidence.url } : { url: '' };
     const rect = await getWindowRect(target.handle).catch((error) => ({ error: { code: error.code, message: error.message } }));
     const focusedElement = await uiaGetFocusedElement().catch((error) => ({ error: { code: error.code, message: error.message } }));
     const promptCandidate = await uiaQueryByNameRole({ handle: target.handle }, { role: 'Edit', timeoutMs: 500 }).catch((error) => ({ error: { code: error.code, message: error.message } }));
@@ -49,6 +50,8 @@ export async function inspectDesktopChatgpt(argv = []) {
       inspectedAt: new Date().toISOString(),
       foreground,
       targetWindow: target,
+      targetEvidence: selection.evidence,
+      rankedCandidates: selection.candidates,
       url,
       rect,
       focusedElement,
@@ -72,15 +75,6 @@ function parseInspectArgs(argv = []) {
     else if (token === '--window-title') out.windowTitle = argv[++i];
   }
   return out;
-}
-
-function pickWindow(windows, titleHint) {
-  return (
-    windows.find((window) => titleHint && String(window.title || '').includes(titleHint)) ||
-    windows.find((window) => String(window.title || '').toLowerCase().includes('chatgpt')) ||
-    windows[0] ||
-    null
-  );
 }
 
 if (process.argv[1]?.endsWith('inspect-desktop-chatgpt.js')) {

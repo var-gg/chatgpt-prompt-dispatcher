@@ -10,7 +10,12 @@ test('inspect-desktop-chatgpt prints JSON', () => {
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.ok, true);
+  assert.ok(Object.hasOwn(parsed, 'ok'));
   assert.ok(Object.hasOwn(parsed, 'foreground'));
-  assert.ok(Object.hasOwn(parsed, 'uiaSnapshot'));
+  if (parsed.ok) {
+    assert.ok(Object.hasOwn(parsed, 'uiaSnapshot'));
+    assert.ok(Object.hasOwn(parsed, 'targetEvidence'));
+  } else {
+    assert.equal(parsed.error?.code, 'CHATGPT_TARGET_NOT_FOUND');
+  }
 });

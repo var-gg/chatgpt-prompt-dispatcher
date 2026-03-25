@@ -82,6 +82,18 @@ export async function uiaQueryByNameRole(target = {}, query = {}) {
   return client().call('uiaQueryByNameRole', { ...target, ...query }, { step: 'desktop-uia-query', timeoutMs: query.timeoutMs || 5000 });
 }
 
+export async function uiaQuery(target = {}, query = {}) {
+  return client().call('uiaQuery', { ...target, ...query }, { step: 'desktop-uia-query-generic', timeoutMs: query.timeoutMs || 5000 });
+}
+
+export async function uiaSetFocus(target = {}, query = {}) {
+  return client().call('uiaSetFocus', { ...target, ...query }, { step: 'desktop-uia-set-focus', timeoutMs: query.timeoutMs || 5000 });
+}
+
+export async function uiaInvoke(target = {}, query = {}) {
+  return client().call('uiaInvoke', { ...target, ...query }, { step: 'desktop-uia-invoke', timeoutMs: query.timeoutMs || 5000 });
+}
+
 export async function uiaGetFocusedElement() {
   return client().call('uiaGetFocusedElement', {}, { step: 'desktop-uia-focused', timeoutMs: 5000 });
 }

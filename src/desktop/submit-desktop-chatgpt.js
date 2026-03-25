@@ -20,7 +20,9 @@ import {
   sendKeys,
   setClipboardText,
   uiaGetFocusedElement,
-  uiaQueryByNameRole
+  uiaInvoke,
+  uiaQueryByNameRole,
+  uiaSetFocus
 } from './windows-input.js';
 
 const CHATGPT_URL = 'https://chatgpt.com/';
@@ -169,7 +171,7 @@ export async function submitDesktopChatgpt(argv = []) {
     await writeJsonlLog(logPath, { step: lastStep });
 
     lastStep = 'validate-prompt';
-    const validation = await validatePromptInput(selectedWindow.handle, args.prompt, promptFocus, args.stepDelayMs);
+    const validation = await validatePromptInput(selectedWindow.handle, args.prompt, promptFocus, args.stepDelayMs, currentUrl);
     clipboardHash = validation.clipboardHash;
     lastFocusedElement = validation.focusedElement ?? lastFocusedElement;
     currentUrl = validation.currentUrlAfterValidation || currentUrl;
@@ -297,13 +299,9 @@ async function dismissInterferingUi(handle, stepDelayMs) {
   const buttonNames = ['모두 허용', 'Allow all', 'Accept all', '확인'];
   for (const name of buttonNames) {
     try {
-      const button = await uiaQueryByNameRole({ handle }, { name, role: 'Button', timeoutMs: 600 });
-      const rect = button.element?.rect;
-      if (rect?.width > 0 && rect?.height > 0) {
-        await clickPoint({ x: rect.x + Math.floor(rect.width / 2), y: rect.y + Math.floor(rect.height / 2) });
-        await delay(stepDelayMs * 2);
-        return { acted: true, method: `button:${name}` };
-      }
+      await uiaInvoke({ handle }, { name, role: 'Button', timeoutMs: 600 });
+      await delay(stepDelayMs * 2);
+      return { acted: true, method: `uia-invoke:${name}` };
     } catch {
       // try next label
     }
@@ -312,6 +310,7 @@ async function dismissInterferingUi(handle, stepDelayMs) {
   try {
     await sendKeys('escape');
     await delay(stepDelayMs);
+    return { acted: true, method: 'escape' };
   } catch {
     // ignore; some dialogs do not respond to escape
   }
@@ -320,33 +319,45 @@ async function dismissInterferingUi(handle, stepDelayMs) {
 }
 
 async function focusPromptBox(handle, fallbackPoint, stepDelayMs) {
-  let via = 'uia';
+  let via = 'uia-focus-prompt-textarea';
   let element = null;
   let omniboxRejected = false;
 
   try {
-    const result = await uiaQueryByNameRole({ handle }, { role: 'Edit', timeoutMs: 1200 });
-    element = result.element;
-    if (isLikelyOmniboxElement(element)) {
-      omniboxRejected = true;
-      via = 'keyboard-tab-then-click';
-      await sendKeys('tab');
-      await delay(stepDelayMs);
-      await sendKeys('tab');
-      await delay(stepDelayMs);
-      await clickPoint(fallbackPoint);
-    } else {
-      const rect = element?.rect;
-      if (rect?.width > 0 && rect?.height > 0) {
-        await clickPoint({ x: rect.x + Math.floor(rect.width / 2), y: rect.y + Math.floor(rect.height / 2) });
-      } else {
-        via = 'calibrated-fallback';
-        await clickPoint(fallbackPoint);
-      }
-    }
+    const focused = await uiaSetFocus({ handle }, {
+      automationId: 'prompt-textarea',
+      className: 'ProseMirror',
+      timeoutMs: 1500
+    });
+    element = focused.element;
   } catch {
-    via = 'calibrated-fallback';
-    await clickPoint(fallbackPoint);
+    try {
+      const result = await uiaQueryByNameRole({ handle }, { role: 'Edit', timeoutMs: 1200 });
+      element = result.element;
+      if (isLikelyOmniboxElement(element)) {
+        omniboxRejected = true;
+        via = 'keyboard-escape-tab-sequence';
+        await sendKeys('escape');
+        await delay(stepDelayMs);
+        await sendKeys('tab', ['shift']);
+        await delay(stepDelayMs);
+        await sendKeys('tab');
+        await delay(stepDelayMs);
+        await sendKeys('tab');
+      } else {
+        via = 'uia-role-edit';
+        await uiaSetFocus({ handle }, {
+          role: 'Edit',
+          name: element?.name,
+          automationId: element?.automationId,
+          className: element?.className,
+          timeoutMs: 800
+        });
+      }
+    } catch {
+      via = 'calibrated-fallback';
+      await clickPoint(fallbackPoint);
+    }
   }
 
   await delay(stepDelayMs);
@@ -354,7 +365,7 @@ async function focusPromptBox(handle, fallbackPoint, stepDelayMs) {
   return { via, focusedElement, element, omniboxRejected };
 }
 
-async function validatePromptInput(handle, prompt, promptFocus, stepDelayMs) {
+async function validatePromptInput(handle, prompt, promptFocus, stepDelayMs, currentUrlHint = CHATGPT_URL) {
   const expectedHash = hashText(prompt);
   await sendKeys('a', ['ctrl']);
   await delay(stepDelayMs);
@@ -364,7 +375,7 @@ async function validatePromptInput(handle, prompt, promptFocus, stepDelayMs) {
   const copied = String(clipboard.text || '');
   const actualHash = hashText(copied);
   const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
-  const currentUrlAfterValidation = await readCurrentUrl(handle);
+  const currentUrlAfterValidation = currentUrlHint;
 
   if (expectedHash !== actualHash) {
     throw new StepError('PROMPT_VALIDATION_FAILED', 'validate-prompt', 'Clipboard hash after Ctrl+A/C did not match the prepared prompt.', {
@@ -382,7 +393,7 @@ async function validatePromptInput(handle, prompt, promptFocus, stepDelayMs) {
   });
 
   return {
-    method: 'clipboard-hash+url-sanity',
+    method: 'clipboard-hash+composer-focus+url-precheck',
     expectedHash,
     actualHash,
     clipboardHash: actualHash,
@@ -392,8 +403,18 @@ async function validatePromptInput(handle, prompt, promptFocus, stepDelayMs) {
 }
 
 function ensurePromptTargetLooksCredible({ promptFocus, focusedElement, currentUrlAfterValidation, prompt, actualHash }) {
-  if (isLikelyOmniboxElement(promptFocus?.element) || isLikelyOmniboxElement(focusedElement)) {
+  const promptFocusLooksLikeComposer = looksLikeComposerElement(promptFocus?.element);
+  const focusedLooksLikeComposer = looksLikeComposerElement(focusedElement);
+
+  if (isLikelyOmniboxElement(focusedElement) || (!focusedLooksLikeComposer && isLikelyOmniboxElement(promptFocus?.element))) {
     throw new StepError('PROMPT_TARGET_INVALID', 'validate-prompt', 'Focused prompt target still looks like the browser omnibox/address bar.', {
+      promptFocus: promptFocus?.element || null,
+      focusedElement: focusedElement || null
+    });
+  }
+
+  if (!promptFocusLooksLikeComposer && !focusedLooksLikeComposer) {
+    throw new StepError('PROMPT_TARGET_INVALID', 'validate-prompt', 'Focused prompt target did not resolve to the ChatGPT composer.', {
       promptFocus: promptFocus?.element || null,
       focusedElement: focusedElement || null
     });
@@ -408,6 +429,25 @@ function ensurePromptTargetLooksCredible({ promptFocus, focusedElement, currentU
   }
 }
 
+function looksLikeComposerElement(element) {
+  if (!element) return false;
+  const haystack = [
+    element.name,
+    element.role,
+    element.controlType,
+    element.automationId,
+    element.className
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return haystack.includes('prompt-textarea')
+    || haystack.includes('prosemirror')
+    || haystack.includes('message chatgpt')
+    || haystack.includes('메시지');
+}
+
 async function submitPrompt(handle, submitPoint, stepDelayMs) {
   try {
     await pressEnter();
@@ -418,13 +458,17 @@ async function submitPrompt(handle, submitPoint, stepDelayMs) {
   }
 
   try {
-    const button = await uiaQueryByNameRole({ handle }, { name: 'Send', role: 'Button', timeoutMs: 1000 });
-    const rect = button.element?.rect;
-    if (rect?.width > 0 && rect?.height > 0) {
-      await clickPoint({ x: rect.x + Math.floor(rect.width / 2), y: rect.y + Math.floor(rect.height / 2) });
-      await delay(stepDelayMs);
-      return { method: 'uia-send-button' };
-    }
+    await uiaInvoke({ handle }, { automationId: 'composer-submit-btn', timeoutMs: 1000 });
+    await delay(stepDelayMs);
+    return { method: 'uia-invoke-submit-button' };
+  } catch {
+    // continue to named button fallback
+  }
+
+  try {
+    await uiaInvoke({ handle }, { name: 'Send', role: 'Button', timeoutMs: 1000 });
+    await delay(stepDelayMs);
+    return { method: 'uia-invoke-send-button' };
   } catch {
     // continue to calibrated fallback
   }
@@ -457,6 +501,7 @@ function hashText(value) {
 export const __desktopSubmitInternals = {
   isLikelyOmniboxElement,
   ensurePromptTargetLooksCredible,
+  looksLikeComposerElement,
   isChatGptUrl,
   hashText
 };

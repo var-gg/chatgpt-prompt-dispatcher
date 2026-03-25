@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { StepError } from '../src/errors.js';
 import { __desktopSubmitInternals } from '../src/desktop/submit-desktop-chatgpt.js';
 
-const { isLikelyOmniboxElement, ensurePromptTargetLooksCredible, hashText } = __desktopSubmitInternals;
+const { isLikelyOmniboxElement, ensurePromptTargetLooksCredible, looksLikeComposerElement, hashText } = __desktopSubmitInternals;
 
 test('isLikelyOmniboxElement rejects Chrome address bar candidates', () => {
   assert.equal(isLikelyOmniboxElement({
@@ -46,7 +46,22 @@ test('ensurePromptTargetLooksCredible fails when validation drifted into omnibox
   });
 });
 
-test('ensurePromptTargetLooksCredible accepts chatgpt URL with non-omnibox elements', () => {
+test('looksLikeComposerElement detects the ChatGPT composer', () => {
+  assert.equal(looksLikeComposerElement({
+    name: 'Message ChatGPT',
+    role: 'ControlType.Document',
+    automationId: 'prompt-textarea',
+    className: 'ProseMirror'
+  }), true);
+
+  assert.equal(looksLikeComposerElement({
+    name: 'ChatGPT',
+    role: 'ControlType.Document',
+    automationId: 'RootWebArea'
+  }), false);
+});
+
+test('ensurePromptTargetLooksCredible accepts chatgpt URL with composer focus', () => {
   assert.doesNotThrow(() => ensurePromptTargetLooksCredible({
     promptFocus: {
       element: {
@@ -57,9 +72,10 @@ test('ensurePromptTargetLooksCredible accepts chatgpt URL with non-omnibox eleme
       }
     },
     focusedElement: {
-      name: 'ChatGPT',
+      name: 'Message ChatGPT',
       role: 'ControlType.Document',
-      automationId: 'RootWebArea'
+      automationId: 'prompt-textarea',
+      className: 'ProseMirror-focused'
     },
     currentUrlAfterValidation: 'https://chatgpt.com/c/abc',
     prompt: '안녕',

@@ -243,18 +243,32 @@ function Get-UiaRootFromWindow($window) {
   }
 }
 
-function Find-UiaByNameRole($window, $name, $role, $timeoutMs = 0) {
+function New-UiaCondition($params) {
+  $conds = New-Object System.Collections.Generic.List[System.Windows.Automation.Condition]
+  if ($params.name) {
+    $conds.Add((New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, [string]$params.name))) | Out-Null
+  }
+  if ($params.role) {
+    $ctrlType = [System.Windows.Automation.ControlType]::$($params.role)
+    $conds.Add((New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $ctrlType))) | Out-Null
+  }
+  if ($params.automationId) {
+    $conds.Add((New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, [string]$params.automationId))) | Out-Null
+  }
+  if ($params.className) {
+    $conds.Add((New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ClassNameProperty, [string]$params.className))) | Out-Null
+  }
+  if ($conds.Count -eq 0) { return [System.Windows.Automation.Condition]::TrueCondition }
+  if ($conds.Count -eq 1) { return $conds[0] }
+  return New-Object System.Windows.Automation.AndCondition($conds.ToArray())
+}
+
+function Find-UiaElement($window, $params, $timeoutMs = 0) {
   $deadline = [DateTime]::UtcNow.AddMilliseconds($timeoutMs)
   do {
     $root = Get-UiaRootFromWindow $window
     if ($root) {
-      $conds = New-Object System.Collections.Generic.List[System.Windows.Automation.Condition]
-      if ($name) { $conds.Add((New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, [string]$name))) | Out-Null }
-      if ($role) {
-        $ctrlType = [System.Windows.Automation.ControlType]::$role
-        $conds.Add((New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $ctrlType))) | Out-Null
-      }
-      $condition = if ($conds.Count -eq 0) { [System.Windows.Automation.Condition]::TrueCondition } elseif ($conds.Count -eq 1) { $conds[0] } else { New-Object System.Windows.Automation.AndCondition($conds.ToArray()) }
+      $condition = New-UiaCondition $params
       $found = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
       if ($found) { return $found }
     }
@@ -262,6 +276,10 @@ function Find-UiaByNameRole($window, $name, $role, $timeoutMs = 0) {
     Start-Sleep -Milliseconds 100
   } while ([DateTime]::UtcNow -lt $deadline)
   return $null
+}
+
+function Find-UiaByNameRole($window, $name, $role, $timeoutMs = 0) {
+  return Find-UiaElement $window @{ name = $name; role = $role } $timeoutMs
 }
 
 function Convert-UiaElement($element) {
@@ -425,6 +443,36 @@ function Invoke-Method($method, $params) {
       $found = Find-UiaByNameRole $window $params.name $params.role ([int]$params.timeoutMs)
       if (-not $found) { throw (New-ErrorResult 'UIA_EMPTY' 'UI Automation query returned no element.') }
       return @{ element = (Convert-UiaElement $found) }
+    }
+    'uiaQuery' {
+      $window = Resolve-Window $params
+      if (-not $window) { throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Window not found.') }
+      $found = Find-UiaElement $window $params ([int]$params.timeoutMs)
+      if (-not $found) { throw (New-ErrorResult 'UIA_EMPTY' 'UI Automation query returned no element.') }
+      return @{ element = (Convert-UiaElement $found) }
+    }
+    'uiaSetFocus' {
+      $window = Resolve-Window $params
+      if (-not $window) { throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Window not found.') }
+      $found = Find-UiaElement $window $params ([int]$params.timeoutMs)
+      if (-not $found) { throw (New-ErrorResult 'UIA_EMPTY' 'UI Automation query returned no element.') }
+      $found.SetFocus()
+      Start-Sleep -Milliseconds 120
+      return @{ element = (Convert-UiaElement $found); focused = (Convert-UiaElement ([System.Windows.Automation.AutomationElement]::FocusedElement)) }
+    }
+    'uiaInvoke' {
+      $window = Resolve-Window $params
+      if (-not $window) { throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Window not found.') }
+      $found = Find-UiaElement $window $params ([int]$params.timeoutMs)
+      if (-not $found) { throw (New-ErrorResult 'UIA_EMPTY' 'UI Automation query returned no element.') }
+      try {
+        $pattern = $found.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+        $pattern.Invoke()
+      } catch {
+        throw (New-ErrorResult 'UIA_INVOKE_FAILED' 'Failed to invoke UI Automation element.' @{ name = $params.name; automationId = $params.automationId; className = $params.className })
+      }
+      Start-Sleep -Milliseconds 120
+      return @{ element = (Convert-UiaElement $found); focused = (Convert-UiaElement ([System.Windows.Automation.AutomationElement]::FocusedElement)) }
     }
     'uiaGetFocusedElement' {
       try {

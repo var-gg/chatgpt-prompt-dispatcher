@@ -34,9 +34,19 @@ MVP for local ChatGPT web input automation on a logged-in browser session.
 - `adapters/mcp/` MCP-specific wrapper notes
 - `skill/` portable bundle root for installation/materialization
 
+## CLI
+
+Primary command forms:
+
+- `node src/index.js submit-chatgpt --prompt "안녕" --dry-run`
+- `npm run submit -- --prompt-file .\\prompt.txt --project "Example Project" --mode thinking --attachment .\\sample.txt`
+
+Submission output is always a JSON receipt. It reports submission metadata only and does **not** include response scraping.
+
 ## Status
 
 - Repository scaffolded.
 - ADR 0001 and ADR 0002 added.
 - Portable skill bundle scaffolded under `skill/`.
-- MVP implementation pending.
+- Core submit CLI scaffolded with receipt JSON output and step-based failure reporting.
+- Visible browser automation implementation is still placeholder/TODO.

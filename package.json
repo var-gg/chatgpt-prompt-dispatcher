@@ -14,7 +14,8 @@
     "smoke": "node src/index.js smoke",
     "build": "node src/build.js",
     "pack-skill": "node src/pack-skill.js",
-    "install-local": "node src/install-local.js"
+    "install-local": "node src/install-local.js",
+    "submit": "node src/index.js submit-chatgpt"
   },
   "keywords": [
     "chatgpt",

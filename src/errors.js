@@ -1,0 +1,23 @@
+export class StepError extends Error {
+  constructor(code, step, message, details = {}) {
+    super(message);
+    this.name = 'StepError';
+    this.code = code;
+    this.step = step;
+    this.details = details;
+  }
+}
+
+export const ERROR_CODES = {
+  INVALID_ARGS: 'INVALID_ARGS',
+  PROFILE_LOAD_FAILED: 'PROFILE_LOAD_FAILED',
+  NAVIGATION_FAILED: 'NAVIGATION_FAILED',
+  LOGIN_REQUIRED: 'LOGIN_REQUIRED',
+  PROJECT_SELECTION_FAILED: 'PROJECT_SELECTION_FAILED',
+  NEW_CHAT_FAILED: 'NEW_CHAT_FAILED',
+  MODE_SELECTION_FAILED: 'MODE_SELECTION_FAILED',
+  ATTACHMENT_FAILED: 'ATTACHMENT_FAILED',
+  PROMPT_INPUT_FAILED: 'PROMPT_INPUT_FAILED',
+  SUBMIT_FAILED: 'SUBMIT_FAILED',
+  SCREENSHOT_FAILED: 'SCREENSHOT_FAILED'
+};

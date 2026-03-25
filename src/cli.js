@@ -1,6 +1,7 @@
 import { loadProfile } from './profile-loader.js';
 import { validateConfig } from './config-schema.js';
 import { submitChatgpt } from './submit-chatgpt.js';
+import { submitBrowserChatgpt } from './submit-browser-chatgpt.js';
 import { warmupChatgpt } from './warmup-chatgpt.js';
 import { runSmoke } from './smoke.js';
 import { submitDesktopChatgpt } from './desktop/submit-desktop-chatgpt.js';
@@ -35,6 +36,12 @@ export async function runCli(argv = []) {
     return;
   }
 
+  if (command === 'submit-browser-chatgpt') {
+    const receipt = await submitBrowserChatgpt(argv.slice(1));
+    console.log(JSON.stringify(receipt, null, 2));
+    return;
+  }
+
   if (command === 'warmup-chatgpt') {
     const receipt = await warmupChatgpt(argv.slice(1));
     console.log(JSON.stringify(receipt, null, 2));
@@ -57,13 +64,15 @@ function printHelp() {
     'Commands:',
     '  help                     Show help',
     '  profile:show <name>      Load and print a sample profile',
-    '  smoke                    Run placeholder smoke check',
-    '  submit-chatgpt [opts]           Submit a prompt through visible browser automation',
+    '  smoke                           Run placeholder smoke check',
+    '  submit-chatgpt [opts]           Submit a prompt through the default Windows desktop transport',
+    '  submit-browser-chatgpt [opts]   Submit through the experimental browser transport (Playwright)',
     '  warmup-chatgpt [opts]           Open ChatGPT and hold the browser for manual login/captcha',
-    '  submit-desktop-chatgpt [opts]   Submit a prompt through Windows desktop input using calibration',
+    '  submit-desktop-chatgpt [opts]   Explicit alias for the default Windows desktop transport',
     '',
-    'Desktop mode notes:',
-    '  - Uses a ChatGPT-specific calibration profile under profiles/desktop/',
-    '  - Focuses/resizes a visible Chrome window and pastes the prompt locally',
+    'Transport notes:',
+    '  - submit-chatgpt defaults to the Windows desktop input dispatcher',
+    '  - pass --transport=browser or use submit-browser-chatgpt for the experimental browser path',
+    '  - no command in this repo reads or scrapes assistant responses',
   ].join('\n'));
 }

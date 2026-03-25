@@ -15,18 +15,36 @@ import {
 
 const CHATGPT_URL = 'https://chatgpt.com/';
 
+function enforceDesktopFirstConstraints(args) {
+  if (args.project) {
+    throw new StepError(ERROR_CODES.INVALID_ARGS, 'desktop-constraints', 'Desktop transport does not support --project yet. Use submit-browser-chatgpt or --transport=browser.');
+  }
+  if (args.attachments?.length) {
+    throw new StepError(ERROR_CODES.INVALID_ARGS, 'desktop-constraints', 'Desktop transport does not support --attachment yet. Use submit-browser-chatgpt or --transport=browser.');
+  }
+  if (args.mode && args.mode !== 'auto') {
+    throw new StepError(ERROR_CODES.INVALID_ARGS, 'desktop-constraints', 'Desktop transport currently supports only --mode auto. Use submit-browser-chatgpt or --transport=browser for browser-side mode selection.');
+  }
+  if (args.newChat) {
+    throw new StepError(ERROR_CODES.INVALID_ARGS, 'desktop-constraints', 'Desktop transport does not support --new-chat yet. Use submit-browser-chatgpt or --transport=browser.');
+  }
+}
+
 export async function submitDesktopChatgpt(argv = []) {
   let lastStep = 'start';
   const notes = [];
 
   try {
     const args = await parseDesktopSubmitArgs(argv);
+    enforceDesktopFirstConstraints(args);
     lastStep = 'load-calibration-profile';
     const calibration = await loadCalibrationProfile(args.calibrationProfile, {
       baseDir: args.calibrationDir
     });
     const targetBounds = getStandardWindowBounds(calibration);
     const titleHint = args.windowTitle || calibration?.window?.titleHint || 'ChatGPT';
+    notes.push('transport=desktop');
+    notes.push('transportStatus=default');
     notes.push(`desktopMode=windows-input`);
     notes.push(`calibrationProfile=${args.calibrationProfile}`);
     notes.push(`titleHint=${titleHint}`);

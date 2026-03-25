@@ -1,11 +1,11 @@
 import path from 'node:path';
-import { submitChatgpt } from './submit-chatgpt.js';
+import { submitBrowserChatgpt } from './submit-browser-chatgpt.js';
 
 export async function runSmoke(argv = []) {
   if (process.env.LIVE_CHATGPT !== '1') {
     console.log(JSON.stringify({
       skipped: true,
-      reason: 'Set LIVE_CHATGPT=1 to enable live browser smoke tests.'
+      reason: 'Set LIVE_CHATGPT=1 to enable live experimental browser smoke tests.'
     }, null, 2));
     return;
   }
@@ -28,7 +28,7 @@ async function runScenario(scenario, argv) {
   const attachmentPath = path.resolve('README.md');
   const profiles = parseSmokeArgs(argv);
   if (scenario === 'A') {
-    return submitChatgpt([
+    return submitBrowserChatgpt([
       '--prompt', 'live smoke A new chat thinking prompt only',
       '--mode', 'thinking',
       '--profile', profiles.profile || 'ko-KR.windows.pro',
@@ -36,7 +36,7 @@ async function runScenario(scenario, argv) {
     ]);
   }
   if (scenario === 'B') {
-    return submitChatgpt([
+    return submitBrowserChatgpt([
       '--prompt', 'live smoke B project attachment',
       '--project', profiles.project || 'Example Project',
       '--mode', profiles.mode || 'auto',

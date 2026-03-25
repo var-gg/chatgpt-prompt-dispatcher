@@ -23,6 +23,15 @@ Defaults:
 - target: `~/.openclaw/skills/chatgpt-web-submit`
 - mode: `symlink`
 
+## Runtime Commands After Install
+
+Primary:
+- `submit-chatgpt` → desktop-first transport
+
+Compatibility / experimental:
+- `submit-browser-chatgpt`
+- `submit-chatgpt --transport=browser`
+
 ## Install Lock
 
 `skill.install.lock.json` records:

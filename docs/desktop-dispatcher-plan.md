@@ -10,7 +10,7 @@ Pivot this repo toward a **Windows desktop-input dispatcher for ChatGPT Web** wh
 - no login automation
 - no generic RPA ambitions
 
-This first pass adds a practical skeleton for a desktop mode without deleting the existing Playwright path yet.
+This desktop path is now the **primary transport**. The retained Playwright path remains available only as an experimental compatibility transport.
 
 ## Why pivot
 
@@ -20,15 +20,20 @@ Playwright is useful when the DOM is stable, but ChatGPT UI drift and browser-se
 
 ### 1. CLI layer
 
-New command:
+Primary command:
+- `submit-chatgpt`
 
+Explicit desktop alias:
 - `submit-desktop-chatgpt`
 
+Experimental compatibility command:
+- `submit-browser-chatgpt`
+
 Responsibilities:
-- parse prompt input and desktop-specific flags
-- load a calibration profile
-- compute absolute screen coordinates from normalized coordinates
-- execute a Windows input plan
+- keep one receipt contract across transports
+- route default submission to the desktop dispatcher
+- retain the browser transport only behind explicit selection
+- execute a Windows input plan or the browser compatibility plan
 - return a receipt JSON
 
 ### 2. Calibration profile storage
@@ -79,45 +84,16 @@ A ChatGPT-specific flow runner using calibration anchors:
 4. paste prompt from clipboard
 5. optionally click submit anchor
 
-## Calibration strategy
-
-### Standardized window
-
-Assume the operator keeps ChatGPT in a normal Chrome window resized to a known baseline, for example:
-- width: 1440
-- height: 900
-
-Coordinates are stored as normalized values in `[0, 1]` relative to that content/window rectangle.
-
-Example:
-- prompt editor center: `{ x: 0.50, y: 0.92 }`
-- submit button center: `{ x: 0.965, y: 0.92 }`
-
-At runtime, those normalized points are transformed into absolute screen coordinates using the actual window rectangle.
-
-### Why normalized coordinates
-
-Benefits:
-- resilient to monitor resolution changes
-- deterministic and testable
-- easy to hand-edit in JSON
-- easy to recalibrate incrementally
-
-### Lightweight fallback ideas
-
-Documented for later, not fully implemented yet:
-- keyboard-first fallback when pointer anchors drift (`Ctrl+L`, navigate, `Tab` stepping, `Ctrl+V`, `Enter`)
-- multiple anchor variants per UI tier (Pro/Plus)
-- profile-specific offsets for Chrome zoom / Windows scaling
-- optional visible overlay helper for guided calibration capture
-
 ## Current limitations
 
-- no OCR or visual detection yet
-- no DOM awareness in desktop mode
-- no attachment flow yet in desktop mode
-- project/mode selection is reserved but not automated yet
-- PowerShell-based window/input calls are best-effort placeholders and may require environment-specific hardening
+Desktop-primary does **not** yet add:
+- response reading
+- OCR or transcript extraction
+- attachment flow in desktop mode
+- project entry in desktop mode
+- browser-style mode selection in desktop mode
+
+Those gaps do not justify changing the boundary. They only justify keeping the browser path as an explicit experimental fallback until the desktop dispatcher matures.
 
 ## Next steps after this first pass
 
@@ -125,4 +101,4 @@ Documented for later, not fully implemented yet:
 2. Strengthen PowerShell window enumeration and coordinate reporting
 3. Add keyboard-only fallback path
 4. Add optional screenshot/verification hooks
-5. Decide whether Playwright remains as fallback or is retired after desktop mode proves stable
+5. Gradually shrink the experimental browser path as desktop coverage improves

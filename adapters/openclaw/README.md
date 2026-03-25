@@ -1,9 +1,18 @@
-# OpenClaw Adapter
+# OpenClaw adapter
 
-Thin host adapter for OpenClaw integration.
+This adapter exposes the repo as a desktop-first ChatGPT prompt submission runtime for OpenClaw.
 
-## Role
+## Primary transport
 
-- Translate OpenClaw-side invocation into core CLI/config calls.
-- Keep host-specific assumptions out of the portable `skill/` bundle.
-- TODO: add concrete invocation bridge once the MVP command contract is fixed.
+- `submit-chatgpt` → Windows desktop input dispatcher backed by a visible ChatGPT window
+
+## Compatibility transport
+
+- `submit-browser-chatgpt` → retained experimental Playwright path
+- `submit-chatgpt --transport=browser` → explicit browser override
+
+## Boundary
+
+- submit prepared prompts only
+- return receipt JSON only
+- do not read or scrape assistant responses

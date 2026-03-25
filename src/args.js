@@ -142,6 +142,10 @@ export async function parseWarmupArgs(argv = []) {
 
 export async function parseDesktopSubmitArgs(argv = []) {
   const options = await parseSubmitArgs(argv);
+  const hasExplicitNewChatFlag = argv.includes('--new-chat') || argv.includes('--no-new-chat');
+  if (!hasExplicitNewChatFlag) {
+    options.newChat = false;
+  }
   if (!['click', 'enter'].includes(options.submitMethod)) {
     throw new StepError(ERROR_CODES.INVALID_ARGS, 'parse-args', '--submit-method must be either click or enter.');
   }

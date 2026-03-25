@@ -1,7 +1,7 @@
 {
   "name": "chatgpt-prompt-dispatcher",
   "version": "0.1.0",
-  "description": "Local Windows prompt dispatch for ChatGPT via visible browser automation and desktop-input calibration.",
+  "description": "Local Windows prompt dispatch for ChatGPT via a desktop-input dispatcher with an experimental browser fallback.",
   "type": "module",
   "main": "src/index.js",
   "bin": {
@@ -18,6 +18,7 @@
     "register-openclaw": "node src/register-openclaw.js",
     "submit": "node src/index.js submit-chatgpt",
     "submit-desktop": "node src/index.js submit-desktop-chatgpt",
+    "submit-browser": "node src/index.js submit-browser-chatgpt",
     "warmup": "node src/index.js warmup-chatgpt"
   },
   "keywords": [

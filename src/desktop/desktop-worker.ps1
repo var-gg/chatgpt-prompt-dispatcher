@@ -313,6 +313,66 @@ function Build-UiaSnapshot($element, [int]$depth = 2) {
   return $node
 }
 
+function Read-UiaText($element) {
+  if (-not $element) { return '' }
+
+  $patterns = @(
+    [System.Windows.Automation.ValuePattern]::Pattern,
+    [System.Windows.Automation.TextPattern]::Pattern,
+    [System.Windows.Automation.LegacyIAccessiblePattern]::Pattern
+  )
+
+  foreach ($patternId in $patterns) {
+    try {
+      if ($element.TryGetCurrentPattern($patternId, [ref]$pattern)) {
+        if ($pattern -is [System.Windows.Automation.ValuePattern]) {
+          return [string]$pattern.Current.Value
+        }
+        if ($pattern -is [System.Windows.Automation.TextPattern]) {
+          return [string]$pattern.DocumentRange.GetText(-1)
+        }
+        if ($pattern -is [System.Windows.Automation.LegacyIAccessiblePattern]) {
+          if ($pattern.Current.Value) { return [string]$pattern.Current.Value }
+          if ($pattern.Current.Name) { return [string]$pattern.Current.Name }
+        }
+      }
+    } catch {
+      # try next pattern
+    }
+  }
+
+  return [string]$element.Current.Name
+}
+
+function Set-ClipboardTextRobust([string]$text, [int]$attempts = 8) {
+  $lastError = $null
+  for ($i = 0; $i -lt $attempts; $i++) {
+    try {
+      [System.Windows.Forms.Clipboard]::SetText($text)
+      return
+    } catch {
+      $lastError = $_
+      Start-Sleep -Milliseconds (80 + ($i * 40))
+    }
+  }
+  throw $lastError
+}
+
+function Get-ClipboardTextRobust([int]$attempts = 8) {
+  $lastError = $null
+  for ($i = 0; $i -lt $attempts; $i++) {
+    try {
+      if ([System.Windows.Forms.Clipboard]::ContainsText()) { return [System.Windows.Forms.Clipboard]::GetText() }
+      return ''
+    } catch {
+      $lastError = $_
+      Start-Sleep -Milliseconds (80 + ($i * 40))
+    }
+  }
+  if ($lastError) { throw $lastError }
+  return ''
+}
+
 function Invoke-Method($method, $params) {
   switch ($method) {
     'listChromeWindows' {
@@ -347,11 +407,11 @@ function Invoke-Method($method, $params) {
       return @{ window = $window }
     }
     'setClipboard' {
-      [System.Windows.Forms.Clipboard]::SetText([string]$params.text)
+      Set-ClipboardTextRobust ([string]$params.text)
       return @{ ok = $true }
     }
     'getClipboard' {
-      $text = if ([System.Windows.Forms.Clipboard]::ContainsText()) { [System.Windows.Forms.Clipboard]::GetText() } else { '' }
+      $text = Get-ClipboardTextRobust
       return @{ text = $text }
     }
     'sendKeys' {
@@ -403,17 +463,17 @@ function Invoke-Method($method, $params) {
       return @{ ok = $true }
     }
     'getUrlViaOmnibox' {
-      $saved = if ([System.Windows.Forms.Clipboard]::ContainsText()) { [System.Windows.Forms.Clipboard]::GetText() } else { '' }
+      $saved = Get-ClipboardTextRobust
       try {
         if ($params.titleHint -or $params.handle) { [void](Invoke-Method 'focusWindow' $params) }
         [void](Invoke-Method 'sendKeys' @{ key = 'l'; modifiers = @('ctrl') })
         Start-Sleep -Milliseconds 80
         [void](Invoke-Method 'sendKeys' @{ key = 'c'; modifiers = @('ctrl') })
         Start-Sleep -Milliseconds 80
-        $text = if ([System.Windows.Forms.Clipboard]::ContainsText()) { [System.Windows.Forms.Clipboard]::GetText() } else { '' }
+        $text = Get-ClipboardTextRobust
         return @{ url = $text }
       } finally {
-        [System.Windows.Forms.Clipboard]::SetText($saved)
+        Set-ClipboardTextRobust $saved
       }
     }
     'getCursorPos' {
@@ -482,6 +542,22 @@ function Invoke-Method($method, $params) {
       }
       if (-not $focused) { throw (New-ErrorResult 'UIA_EMPTY' 'No focused UI Automation element found.') }
       return @{ element = (Convert-UiaElement $focused) }
+    }
+    'uiaReadText' {
+      $window = Resolve-Window $params
+      if (-not $window) { throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Window not found.') }
+      $found = Find-UiaElement $window $params ([int]$params.timeoutMs)
+      if (-not $found) { throw (New-ErrorResult 'UIA_EMPTY' 'UI Automation query returned no element.') }
+      return @{ element = (Convert-UiaElement $found); text = (Read-UiaText $found) }
+    }
+    'uiaReadFocusedText' {
+      try {
+        $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+      } catch {
+        throw (New-ErrorResult 'UIA_EMPTY' 'No focused UI Automation element found.')
+      }
+      if (-not $focused) { throw (New-ErrorResult 'UIA_EMPTY' 'No focused UI Automation element found.') }
+      return @{ element = (Convert-UiaElement $focused); text = (Read-UiaText $focused) }
     }
     'waitForWindow' {
       $timeoutMs = [int]($params.timeoutMs)

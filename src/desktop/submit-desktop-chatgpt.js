@@ -18,10 +18,11 @@ import {
   pressEnter,
   resizeWindow,
   sendKeys,
+  sendText,
   setClipboardText,
   uiaGetFocusedElement,
   uiaInvoke,
-  uiaQueryByNameRole,
+  uiaReadText,
   uiaSetFocus
 } from './windows-input.js';
 
@@ -77,8 +78,8 @@ export async function submitDesktopChatgpt(argv = []) {
 
     notes.push('transport=desktop');
     notes.push('transportStatus=default');
-    notes.push('fallbackOrder=UIA>keyboard-omnibox>calibrated-coordinates');
-    notes.push('desktopMode=deterministic-submit');
+    notes.push('fallbackOrder=UIA-composer-only>calibrated-coordinates');
+    notes.push('desktopMode=deterministic-uia-composer-only');
     notes.push(`calibrationProfile=${args.calibrationProfile}`);
     notes.push(`titleHint=${titleHint}`);
     notes.push(`targetBounds=${targetBounds.x},${targetBounds.y},${targetBounds.width},${targetBounds.height}`);
@@ -160,23 +161,22 @@ export async function submitDesktopChatgpt(argv = []) {
     }
     await writeJsonlLog(logPath, { step: lastStep, promptFocus });
 
-    lastStep = 'set-prompt-clipboard';
-    await setClipboardText(args.prompt);
-    clipboardHash = hashText(args.prompt);
-    await writeJsonlLog(logPath, { step: lastStep, clipboardHash, promptLength: args.prompt.length });
-
-    lastStep = 'paste-prompt';
-    await pasteClipboard();
-    await delay(args.stepDelayMs);
-    await writeJsonlLog(logPath, { step: lastStep });
+    lastStep = 'insert-prompt';
+    const insertion = await insertPrompt(selectedWindow.handle, args.prompt, promptFocus, args.stepDelayMs);
+    clipboardHash = insertion.actualHash;
+    lastFocusedElement = insertion.focusedElement ?? lastFocusedElement;
+    notes.push(`promptHash=${insertion.expectedHash}`);
+    notes.push(`insertionMethod=${insertion.method}`);
+    await writeJsonlLog(logPath, { step: lastStep, insertion });
 
     lastStep = 'validate-prompt';
-    const validation = await validatePromptInput(selectedWindow.handle, args.prompt, promptFocus, args.stepDelayMs, currentUrl);
+    const validation = await validatePromptInput(selectedWindow.handle, args.prompt, promptFocus, insertion, args.stepDelayMs);
     clipboardHash = validation.clipboardHash;
     lastFocusedElement = validation.focusedElement ?? lastFocusedElement;
-    currentUrl = validation.currentUrlAfterValidation || currentUrl;
-    notes.push(`promptHash=${validation.expectedHash}`);
     notes.push(`validationMethod=${validation.method}`);
+    if (validation.proof) {
+      notes.push(`inputProof=${validation.proof}`);
+    }
     await writeJsonlLog(logPath, { step: lastStep, validation });
 
     if (args.dryRun || !args.submit) {
@@ -195,9 +195,12 @@ export async function submitDesktopChatgpt(argv = []) {
     }
 
     lastStep = 'submit-prompt';
-    const submitResult = await submitPrompt(selectedWindow.handle, submitPoint, args.stepDelayMs);
+    const submitResult = await submitPrompt(selectedWindow.handle, submitPoint, args.stepDelayMs, args.prompt);
     await writeJsonlLog(logPath, { step: lastStep, submitResult });
     notes.push(`submitMethod=${submitResult.method}`);
+    if (submitResult.proof) {
+      notes.push(`submitProof=${submitResult.proof}`);
+    }
 
     return createReceipt({
       submitted: true,
@@ -285,14 +288,14 @@ async function openFreshTab(stepDelayMs) {
 }
 
 async function navigateToChatGpt(targetUrl, stepDelayMs) {
-  await setClipboardText(targetUrl);
-  await delay(stepDelayMs);
   await sendKeys('l', ['ctrl']);
   await delay(stepDelayMs);
-  await pasteClipboard();
+  await sendKeys('a', ['ctrl']);
+  await delay(stepDelayMs);
+  await sendText(targetUrl);
   await delay(stepDelayMs);
   await pressEnter();
-  await delay(stepDelayMs * 6);
+  await delay(stepDelayMs * 10);
 }
 
 async function dismissInterferingUi(handle, stepDelayMs) {
@@ -327,79 +330,229 @@ async function focusPromptBox(handle, fallbackPoint, stepDelayMs) {
     const focused = await uiaSetFocus({ handle }, {
       automationId: 'prompt-textarea',
       className: 'ProseMirror',
-      timeoutMs: 1500
+      timeoutMs: 2500
     });
     element = focused.element;
+    await clickComposerCenter(element, fallbackPoint);
+    await delay(stepDelayMs);
+    await uiaSetFocus({ handle }, {
+      automationId: 'prompt-textarea',
+      className: 'ProseMirror',
+      timeoutMs: 1200
+    }).catch(() => null);
   } catch {
-    try {
-      const result = await uiaQueryByNameRole({ handle }, { role: 'Edit', timeoutMs: 1200 });
-      element = result.element;
-      if (isLikelyOmniboxElement(element)) {
-        omniboxRejected = true;
-        via = 'keyboard-escape-tab-sequence';
-        await sendKeys('escape');
-        await delay(stepDelayMs);
-        await sendKeys('tab', ['shift']);
-        await delay(stepDelayMs);
-        await sendKeys('tab');
-        await delay(stepDelayMs);
-        await sendKeys('tab');
-      } else {
-        via = 'uia-role-edit';
-        await uiaSetFocus({ handle }, {
-          role: 'Edit',
-          name: element?.name,
-          automationId: element?.automationId,
-          className: element?.className,
-          timeoutMs: 800
-        });
-      }
-    } catch {
-      via = 'calibrated-fallback';
-      await clickPoint(fallbackPoint);
-    }
+    via = 'calibrated-fallback';
+    await clickPoint(fallbackPoint);
+    await delay(stepDelayMs);
+    const retry = await uiaSetFocus({ handle }, {
+      automationId: 'prompt-textarea',
+      className: 'ProseMirror',
+      timeoutMs: 1800
+    }).catch(() => null);
+    element = retry?.element || null;
   }
 
   await delay(stepDelayMs);
   const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
+  if (isLikelyOmniboxElement(focusedElement) || isLikelyOmniboxElement(element)) {
+    omniboxRejected = true;
+  }
   return { via, focusedElement, element, omniboxRejected };
 }
 
-async function validatePromptInput(handle, prompt, promptFocus, stepDelayMs, currentUrlHint = CHATGPT_URL) {
+async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
   const expectedHash = hashText(prompt);
-  await sendKeys('a', ['ctrl']);
-  await delay(stepDelayMs);
-  await sendKeys('c', ['ctrl']);
-  await delay(stepDelayMs);
-  const clipboard = await getClipboardText();
-  const copied = String(clipboard.text || '');
-  const actualHash = hashText(copied);
-  const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
-  const currentUrlAfterValidation = currentUrlHint;
 
-  if (expectedHash !== actualHash) {
-    throw new StepError('PROMPT_VALIDATION_FAILED', 'validate-prompt', 'Clipboard hash after Ctrl+A/C did not match the prepared prompt.', {
-      expectedHash,
-      actualHash
-    });
+  try {
+    await refocusComposer(handle, promptFocus, stepDelayMs);
+    await clearComposer(stepDelayMs);
+    await sendText(prompt);
+    await delay(stepDelayMs * 2);
+
+    let proof = await readComposerProof(handle);
+    if (proof.text.includes(prompt)) {
+      return {
+        method: 'uia-focus+unicode-sendkeys+uia-text-read',
+        expectedHash,
+        actualHash: hashText(proof.text),
+        focusedElement: proof.focusedElement,
+        composerElement: proof.element,
+        proof: 'composerTextContainsPrompt',
+        composerTextSample: proof.text.slice(0, 200)
+      };
+    }
+
+    await refocusComposer(handle, promptFocus, stepDelayMs);
+    await setClipboardText(prompt);
+    await delay(stepDelayMs);
+    await pasteClipboard();
+    await delay(stepDelayMs * 2);
+    proof = await readComposerProof(handle);
+    if (proof.text.includes(prompt)) {
+      return {
+        method: 'uia-focus+clipboard-paste+uia-text-read',
+        expectedHash,
+        actualHash: hashText(proof.text),
+        focusedElement: proof.focusedElement,
+        composerElement: proof.element,
+        proof: 'composerTextContainsPrompt',
+        composerTextSample: proof.text.slice(0, 200)
+      };
+    }
+  } catch {
+    // fall through to machine-specific coordinate proof path
   }
+
+  const coordinateProof = await insertPromptViaCoordinateProof(prompt, stepDelayMs);
+  return {
+    method: coordinateProof.method,
+    expectedHash,
+    actualHash: coordinateProof.actualHash,
+    focusedElement: coordinateProof.focusedElement,
+    composerElement: coordinateProof.composerElement,
+    proof: coordinateProof.proof,
+    composerTextSample: coordinateProof.composerTextSample
+  };
+}
+
+async function validatePromptInput(handle, prompt, promptFocus, insertion, stepDelayMs) {
+  const expectedHash = hashText(prompt);
+
+  if (String(insertion?.proof || '').includes('coordinate')) {
+    return {
+      method: `${insertion?.method || 'unknown'}+clipboard-roundtrip-proof`,
+      expectedHash,
+      actualHash: insertion.actualHash,
+      clipboardHash: expectedHash,
+      focusedElement: insertion.focusedElement,
+      composerElement: insertion.composerElement,
+      proof: insertion.proof,
+      composerTextSample: insertion.composerTextSample
+    };
+  }
+
+  await refocusComposer(handle, promptFocus, stepDelayMs);
+  const proof = await readComposerProof(handle);
+  const focusedElement = proof.focusedElement;
 
   ensurePromptTargetLooksCredible({
     promptFocus,
     focusedElement,
-    currentUrlAfterValidation,
+    currentUrlAfterValidation: CHATGPT_URL,
     prompt,
-    actualHash
+    actualHash: hashText(proof.text)
   });
 
+  if (!proof.text.includes(prompt)) {
+    throw new StepError('PROMPT_VALIDATION_FAILED', 'validate-prompt', 'ChatGPT composer text proof did not contain the prepared prompt.', {
+      expectedHash,
+      actualHash: hashText(proof.text),
+      composerTextSample: proof.text.slice(0, 200),
+      focusedElement,
+      composerElement: proof.element,
+      insertionMethod: insertion?.method
+    });
+  }
+
   return {
-    method: 'clipboard-hash+composer-focus+url-precheck',
+    method: `${insertion?.method || 'unknown'}+uia-text-proof`,
     expectedHash,
-    actualHash,
-    clipboardHash: actualHash,
+    actualHash: hashText(proof.text),
+    clipboardHash: expectedHash,
     focusedElement,
-    currentUrlAfterValidation
+    composerElement: proof.element,
+    proof: 'composerTextContainsPrompt',
+    composerTextSample: proof.text.slice(0, 200)
   };
+}
+
+async function refocusComposer(handle, promptFocus, stepDelayMs) {
+  await uiaSetFocus({ handle }, {
+    automationId: 'prompt-textarea',
+    className: 'ProseMirror',
+    timeoutMs: 1800
+  }).catch(() => null);
+  await delay(stepDelayMs);
+  const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
+  if (isLikelyOmniboxElement(focusedElement)) {
+    throw new StepError('PROMPT_TARGET_INVALID', 'refocus-composer', 'Focused element relapsed into the browser omnibox.', {
+      promptFocus: promptFocus?.element || null,
+      focusedElement
+    });
+  }
+  if (!looksLikeComposerElement(focusedElement)) {
+    throw new StepError('PROMPT_TARGET_INVALID', 'refocus-composer', 'Focused element is not the ChatGPT composer after UIA refocus.', {
+      promptFocus: promptFocus?.element || null,
+      focusedElement
+    });
+  }
+  return focusedElement;
+}
+
+async function clearComposer(stepDelayMs) {
+  await sendKeys('a', ['ctrl']);
+  await delay(stepDelayMs);
+}
+
+async function clickComposerCenter(element, fallbackPoint) {
+  const rect = element?.rect;
+  if (rect?.width > 0 && rect?.height > 0) {
+    await clickPoint({ x: rect.x + (rect.width / 2), y: rect.y + Math.max(12, Math.min(rect.height / 2, rect.height - 4)) });
+    return;
+  }
+  await clickPoint(fallbackPoint);
+}
+
+async function readComposerProof(handle) {
+  const composer = await uiaReadText({ handle }, {
+    automationId: 'prompt-textarea',
+    className: 'ProseMirror',
+    timeoutMs: 1500
+  });
+  const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
+  return {
+    element: composer.element,
+    focusedElement,
+    text: normalizeComposerText(composer.text)
+  };
+}
+
+async function insertPromptViaCoordinateProof(prompt, stepDelayMs) {
+  await delay(stepDelayMs * 6);
+  await clickPoint({ x: 806, y: 530 });
+  await delay(stepDelayMs * 2);
+  await sendKeys('a', ['ctrl']);
+  await delay(stepDelayMs);
+  await setClipboardText(prompt);
+  await delay(stepDelayMs);
+  await pasteClipboard();
+  await delay(stepDelayMs * 2);
+  await sendKeys('a', ['ctrl']);
+  await delay(stepDelayMs);
+  await sendKeys('c', ['ctrl']);
+  await delay(stepDelayMs * 2);
+  const clipboard = await getClipboardText();
+  const copied = normalizeComposerText(clipboard.text);
+  if (copied !== prompt) {
+    throw new StepError('PROMPT_VALIDATION_FAILED', 'insert-prompt', 'Machine-specific coordinate insertion path did not round-trip the prompt through clipboard selection.', {
+      expectedHash: hashText(prompt),
+      actualHash: hashText(copied),
+      copiedPreview: copied.slice(0, 200)
+    });
+  }
+  const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
+  return {
+    method: 'coordinate-click+clipboard-paste+clipboard-roundtrip',
+    actualHash: hashText(copied),
+    focusedElement,
+    composerElement: null,
+    proof: 'coordinateClipboardRoundtripMatchedPrompt',
+    composerTextSample: copied.slice(0, 200)
+  };
+}
+
+function normalizeComposerText(text) {
+  return String(text || '').replace(/\r/g, '').replace(/\uFFFC/g, '').trim();
 }
 
 function ensurePromptTargetLooksCredible({ promptFocus, focusedElement, currentUrlAfterValidation, prompt, actualHash }) {
@@ -448,34 +601,41 @@ function looksLikeComposerElement(element) {
     || haystack.includes('메시지');
 }
 
-async function submitPrompt(handle, submitPoint, stepDelayMs) {
+async function submitPrompt(handle, submitPoint, stepDelayMs, prompt) {
+  let method = 'enter';
   try {
     await pressEnter();
-    await delay(stepDelayMs);
-    return { method: 'enter' };
+    await delay(stepDelayMs * 3);
   } catch {
-    // continue to fallback
+    try {
+      await uiaInvoke({ handle }, { automationId: 'composer-submit-btn', timeoutMs: 1000 });
+      await delay(stepDelayMs * 3);
+      method = 'uia-invoke-submit-button';
+    } catch {
+      try {
+        await uiaInvoke({ handle }, { name: 'Send', role: 'Button', timeoutMs: 1000 });
+        await delay(stepDelayMs * 3);
+        method = 'uia-invoke-send-button';
+      } catch {
+        await clickPoint(submitPoint);
+        await delay(stepDelayMs * 3);
+        method = 'calibrated-send-button';
+      }
+    }
   }
 
-  try {
-    await uiaInvoke({ handle }, { automationId: 'composer-submit-btn', timeoutMs: 1000 });
-    await delay(stepDelayMs);
-    return { method: 'uia-invoke-submit-button' };
-  } catch {
-    // continue to named button fallback
-  }
+  const after = await readComposerProof(handle).catch(() => ({ text: '', element: null, focusedElement: null }));
+  const proof = after.text && after.text.includes(prompt)
+    ? 'submitUnprovenComposerStillContainsPrompt'
+    : 'composerClearedOrChangedAfterSubmit';
 
-  try {
-    await uiaInvoke({ handle }, { name: 'Send', role: 'Button', timeoutMs: 1000 });
-    await delay(stepDelayMs);
-    return { method: 'uia-invoke-send-button' };
-  } catch {
-    // continue to calibrated fallback
-  }
-
-  await clickPoint(submitPoint);
-  await delay(stepDelayMs);
-  return { method: 'calibrated-send-button' };
+  return {
+    method,
+    proof,
+    composerTextSample: String(after.text || '').slice(0, 200),
+    focusedElement: after.focusedElement,
+    composerElement: after.element
+  };
 }
 
 function isLikelyOmniboxElement(element) {

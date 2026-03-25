@@ -30,11 +30,11 @@ export async function getForegroundWindow() {
 }
 
 export async function setClipboardText(text) {
-  return client().call('setClipboard', { text }, { step: 'desktop-set-clipboard', timeoutMs: 5000 });
+  return client().call('setClipboard', { text }, { step: 'desktop-set-clipboard', timeoutMs: 12000 });
 }
 
 export async function getClipboardText() {
-  return client().call('getClipboard', {}, { step: 'desktop-get-clipboard', timeoutMs: 5000 });
+  return client().call('getClipboard', {}, { step: 'desktop-get-clipboard', timeoutMs: 12000 });
 }
 
 const SPECIAL_KEYS = new Set(['enter', 'v', 'c', 'l', 't', 'a', '0', 'tab', 'escape']);
@@ -44,6 +44,10 @@ export async function sendKeys(keys, modifiers = []) {
     return client().call('sendKeys', { text: keys }, { step: 'desktop-send-keys', timeoutMs: 5000 });
   }
   return client().call('sendKeys', { key: keys, modifiers }, { step: 'desktop-send-keys', timeoutMs: 5000 });
+}
+
+export async function sendText(text) {
+  return client().call('sendKeys', { text }, { step: 'desktop-send-text', timeoutMs: 10000 });
 }
 
 export async function pasteClipboard() {
@@ -96,6 +100,14 @@ export async function uiaInvoke(target = {}, query = {}) {
 
 export async function uiaGetFocusedElement() {
   return client().call('uiaGetFocusedElement', {}, { step: 'desktop-uia-focused', timeoutMs: 5000 });
+}
+
+export async function uiaReadText(target = {}, query = {}) {
+  return client().call('uiaReadText', { ...target, ...query }, { step: 'desktop-uia-read-text', timeoutMs: query.timeoutMs || 5000 });
+}
+
+export async function uiaReadFocusedText() {
+  return client().call('uiaReadFocusedText', {}, { step: 'desktop-uia-read-focused-text', timeoutMs: 5000 });
 }
 
 export async function waitForWindow(target = {}, timeoutMs = 5000) {

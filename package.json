@@ -19,7 +19,8 @@
     "submit": "node src/index.js submit-chatgpt",
     "submit-desktop": "node src/index.js submit-desktop-chatgpt",
     "submit-browser": "node src/index.js submit-browser-chatgpt",
-    "warmup": "node src/index.js warmup-chatgpt"
+    "warmup": "node src/index.js warmup-chatgpt",
+    "worker-smoke": "node src/desktop/worker-smoke.js"
   },
   "keywords": [
     "chatgpt",

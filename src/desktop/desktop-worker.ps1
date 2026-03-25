@@ -1,332 +1,441 @@
+param(
+  [string]$LogPath = ''
+)
+
 $ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName UIAutomationClient
-Add-Type @"
+Add-Type -AssemblyName UIAutomationTypes
+
+$win32Source = @'
 using System;
-using System.Text;
 using System.Runtime.InteropServices;
-public static class NativeMethods {
+using System.Text;
+public static class DesktopWorkerWin32 {
   [StructLayout(LayoutKind.Sequential)]
   public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
   [StructLayout(LayoutKind.Sequential)]
-  public struct POINT { public int X; public int Y; }
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll", SetLastError=true)] public static extern bool SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
-  [DllImport("user32.dll", SetLastError=true)] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+  public struct INPUT {
+    public int type;
+    public InputUnion U;
+  }
+
+  [StructLayout(LayoutKind.Explicit)]
+  public struct InputUnion {
+    [FieldOffset(0)] public MOUSEINPUT mi;
+    [FieldOffset(0)] public KEYBDINPUT ki;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct MOUSEINPUT {
+    public int dx;
+    public int dy;
+    public int mouseData;
+    public int dwFlags;
+    public int time;
+    public IntPtr dwExtraInfo;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct KEYBDINPUT {
+    public short wVk;
+    public short wScan;
+    public int dwFlags;
+    public int time;
+    public IntPtr dwExtraInfo;
+  }
+
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
-  [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-  [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT point);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+  [DllImport("user32.dll")] public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
-  [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+  [DllImport("user32.dll")] public static extern IntPtr GetMessageExtraInfo();
 }
-"@
+'@
+Add-Type -TypeDefinition $win32Source
 
-$MouseEventLeftDown = 0x0002
-$MouseEventLeftUp = 0x0004
-$MouseEventRightDown = 0x0008
-$MouseEventRightUp = 0x0010
-$SwRestore = 9
-$SwShow = 5
-$SwpNoZOrder = 0x0004
-$SwpShowWindow = 0x0040
+$SW_RESTORE = 9
+$SWP_NOZORDER = 0x0004
+$SWP_NOACTIVATE = 0x0010
+$INPUT_MOUSE = 0
+$INPUT_KEYBOARD = 1
+$KEYEVENTF_KEYUP = 0x0002
+$KEYEVENTF_UNICODE = 0x0004
+$MOUSEEVENTF_LEFTDOWN = 0x0002
+$MOUSEEVENTF_LEFTUP = 0x0004
+$MOUSEEVENTF_RIGHTDOWN = 0x0008
+$MOUSEEVENTF_RIGHTUP = 0x0010
 
-function New-Success($id, $result) {
-  return @{ jsonrpc = '2.0'; id = $id; result = $result }
+function Write-JsonLine($obj) {
+  $json = $obj | ConvertTo-Json -Depth 8 -Compress
+  [Console]::Out.WriteLine($json)
 }
 
-function New-Error($id, $code, $message, $data = $null) {
+function Write-WorkerLog($event) {
+  if ([string]::IsNullOrWhiteSpace($LogPath)) { return }
+  $payload = @{ ts = [DateTime]::UtcNow.ToString('o') }
+  if ($event -is [System.Collections.IDictionary]) {
+    foreach ($key in $event.Keys) {
+      $payload[$key] = $event[$key]
+    }
+  } else {
+    foreach ($prop in $event.PSObject.Properties) {
+      $payload[$prop.Name] = $prop.Value
+    }
+  }
+  $line = $payload | ConvertTo-Json -Depth 10 -Compress
+  [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($LogPath)) | Out-Null
+  Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+}
+
+function New-ErrorResult($code, $message, $data = $null) {
   $err = @{ code = $code; message = $message }
   if ($null -ne $data) { $err.data = $data }
-  return @{ jsonrpc = '2.0'; id = $id; error = $err }
+  return [System.Exception]::new(($err | ConvertTo-Json -Depth 10 -Compress))
 }
 
-function Get-WindowTitle([IntPtr]$hWnd) {
-  $len = [NativeMethods]::GetWindowTextLength($hWnd)
-  $sb = New-Object System.Text.StringBuilder ($len + 1)
-  [void][NativeMethods]::GetWindowText($hWnd, $sb, $sb.Capacity)
-  return $sb.ToString()
-}
-
-function Get-WindowRectObject([IntPtr]$hWnd) {
-  $rect = New-Object NativeMethods+RECT
-  $ok = [NativeMethods]::GetWindowRect($hWnd, [ref]$rect)
-  if (-not $ok) { return $null }
-  return @{
-    x = $rect.Left
-    y = $rect.Top
-    width = ($rect.Right - $rect.Left)
-    height = ($rect.Bottom - $rect.Top)
-    left = $rect.Left
-    top = $rect.Top
-    right = $rect.Right
-    bottom = $rect.Bottom
+function Find-WindowByHandle([IntPtr]$handle) {
+  if ($handle -eq [IntPtr]::Zero) { return $null }
+  $rect = New-Object DesktopWorkerWin32+RECT
+  if (-not [DesktopWorkerWin32]::GetWindowRect($handle, [ref]$rect)) { return $null }
+  $titleBuilder = New-Object System.Text.StringBuilder 1024
+  [void][DesktopWorkerWin32]::GetWindowText($handle, $titleBuilder, $titleBuilder.Capacity)
+  $processId = 0
+  [void][DesktopWorkerWin32]::GetWindowThreadProcessId($handle, [ref]$processId)
+  [pscustomobject]@{
+    handle = $handle.ToInt64().ToString()
+    title = $titleBuilder.ToString()
+    processId = [int]$processId
+    rect = @{ x = $rect.Left; y = $rect.Top; width = ($rect.Right - $rect.Left); height = ($rect.Bottom - $rect.Top) }
   }
 }
 
-function ConvertTo-Hwnd($value) {
-  if ($null -eq $value) { return [IntPtr]::Zero }
-  if ($value -is [IntPtr]) { return $value }
-  $text = [string]$value
-  if ([string]::IsNullOrWhiteSpace($text)) { return [IntPtr]::Zero }
-  return [IntPtr]::new([Int64]$text)
+function Get-DesktopWindows() {
+  $list = New-Object System.Collections.Generic.List[object]
+  $callback = [DesktopWorkerWin32+EnumWindowsProc]{
+    param([IntPtr]$hWnd, [IntPtr]$lParam)
+    if (-not [DesktopWorkerWin32]::IsWindowVisible($hWnd)) { return $true }
+    $titleBuilder = New-Object System.Text.StringBuilder 1024
+    [void][DesktopWorkerWin32]::GetWindowText($hWnd, $titleBuilder, $titleBuilder.Capacity)
+    $title = $titleBuilder.ToString()
+    if ([string]::IsNullOrWhiteSpace($title)) { return $true }
+    $processId = 0
+    [void][DesktopWorkerWin32]::GetWindowThreadProcessId($hWnd, [ref]$processId)
+    try { $proc = Get-Process -Id $processId -ErrorAction Stop } catch { return $true }
+    $rect = New-Object DesktopWorkerWin32+RECT
+    if (-not [DesktopWorkerWin32]::GetWindowRect($hWnd, [ref]$rect)) { return $true }
+    $list.Add([pscustomobject]@{
+      handle = $hWnd.ToInt64().ToString()
+      title = $title
+      processId = [int]$processId
+      processName = $proc.ProcessName
+      rect = @{ x = $rect.Left; y = $rect.Top; width = ($rect.Right - $rect.Left); height = ($rect.Bottom - $rect.Top) }
+    }) | Out-Null
+    return $true
+  }
+  [void][DesktopWorkerWin32]::EnumWindows($callback, [IntPtr]::Zero)
+  return $list
 }
 
-function Find-Window($params) {
-  if ($params.hwnd) {
-    $hwnd = ConvertTo-Hwnd $params.hwnd
-    if ($hwnd -eq [IntPtr]::Zero) { return $null }
-    return $hwnd
+function Resolve-Window($params) {
+  if ($params.handle) {
+    $value = [Int64]$params.handle
+    $window = Find-WindowByHandle([IntPtr]::new($value))
+    if ($window) { return $window }
   }
-
-  $titleHint = [string]$params.titleHint
-  $processNames = @('chrome', 'msedge')
-  if ($params.processNames) {
-    $processNames = @($params.processNames)
+  $all = Get-DesktopWindows
+  if ($params.titleHint) {
+    $hint = [string]$params.titleHint
+    $match = $all | Where-Object { $_.title -like "*$hint*" } | Select-Object -First 1
+    if ($match) { return $match }
   }
-
-  $candidates = @()
-  foreach ($proc in Get-Process -ErrorAction SilentlyContinue) {
-    try {
-      if ($processNames.Count -gt 0 -and ($processNames -notcontains $proc.ProcessName.ToLower())) { continue }
-      if ($proc.MainWindowHandle -eq 0) { continue }
-      $hwnd = [IntPtr]::new($proc.MainWindowHandle)
-      if (-not [NativeMethods]::IsWindowVisible($hwnd)) { continue }
-      $title = Get-WindowTitle $hwnd
-      if ([string]::IsNullOrWhiteSpace($title)) { continue }
-      if ($titleHint -and ($title -notlike "*$titleHint*")) { continue }
-      $candidates += [pscustomobject]@{ hwnd = $hwnd; title = $title; processName = $proc.ProcessName; pid = $proc.Id }
-    } catch {}
-  }
-
-  return ($candidates | Select-Object -First 1).hwnd
-}
-
-function Get-WindowObject([IntPtr]$hwnd) {
-  if ($hwnd -eq [IntPtr]::Zero) { return $null }
-  $title = Get-WindowTitle $hwnd
-  $rect = Get-WindowRectObject $hwnd
-  [uint32]$pid = 0
-  [void][NativeMethods]::GetWindowThreadProcessId($hwnd, [ref]$pid)
-  $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
-  return @{
-    hwnd = $hwnd.ToInt64().ToString()
-    title = $title
-    processId = [int]$pid
-    processName = $proc.ProcessName
-    rect = $rect
-    visible = [NativeMethods]::IsWindowVisible($hwnd)
-  }
-}
-
-function Invoke-Click($params, $button = 'left', $double = $false) {
-  [void][NativeMethods]::SetCursorPos([int]$params.x, [int]$params.y)
-  Start-Sleep -Milliseconds ([int]($params.preClickDelayMs ?? 35))
-  if ($button -eq 'right') {
-    [NativeMethods]::mouse_event($MouseEventRightDown, 0, 0, 0, [UIntPtr]::Zero)
-    [NativeMethods]::mouse_event($MouseEventRightUp, 0, 0, 0, [UIntPtr]::Zero)
-  } else {
-    [NativeMethods]::mouse_event($MouseEventLeftDown, 0, 0, 0, [UIntPtr]::Zero)
-    [NativeMethods]::mouse_event($MouseEventLeftUp, 0, 0, 0, [UIntPtr]::Zero)
-    if ($double) {
-      Start-Sleep -Milliseconds 70
-      [NativeMethods]::mouse_event($MouseEventLeftDown, 0, 0, 0, [UIntPtr]::Zero)
-      [NativeMethods]::mouse_event($MouseEventLeftUp, 0, 0, 0, [UIntPtr]::Zero)
-    }
-  }
-  return @{ ok = $true; x = [int]$params.x; y = [int]$params.y; button = $button; double = $double }
-}
-
-function Get-RoleName($controlType) {
-  if ($null -eq $controlType) { return $null }
-  try { return $controlType.ProgrammaticName } catch { return $null }
-}
-
-function Find-UiaElement($params) {
-  $root = [System.Windows.Automation.AutomationElement]::RootElement
-  if ($params.windowHwnd) {
-    $hwnd = ConvertTo-Hwnd $params.windowHwnd
-    if ($hwnd -ne [IntPtr]::Zero) {
-      try { $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd) } catch {}
-    }
-  }
-
-  $name = [string]$params.name
-  $role = [string]$params.role
-  $scopeValue = [string]($params.scope ?? 'descendants')
-  $scope = [System.Windows.Automation.TreeScope]::Descendants
-  if ($scopeValue -eq 'children') { $scope = [System.Windows.Automation.TreeScope]::Children }
-
-  $condition = [System.Windows.Automation.Condition]::TrueCondition
-  if ($name) {
-    $condition = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $name)
-  }
-
-  $collection = $root.FindAll($scope, $condition)
-  foreach ($item in $collection) {
-    $itemRole = Get-RoleName $item.Current.ControlType
-    if ($role) {
-      if (-not $itemRole) { continue }
-      if ($itemRole -notlike "*$role*") { continue }
-    }
-    return $item
+  if ($params.processName) {
+    $name = [string]$params.processName
+    $match = $all | Where-Object { $_.processName -ieq $name } | Select-Object -First 1
+    if ($match) { return $match }
   }
   return $null
 }
 
-function Wait-Until($timeoutMs, $intervalMs, [scriptblock]$predicate) {
-  $start = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-  while (([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $start) -lt $timeoutMs) {
-    $value = & $predicate
-    if ($null -ne $value) { return $value }
-    Start-Sleep -Milliseconds $intervalMs
-  }
-  return $null
+function Send-KeyInput($vk, [bool]$keyUp = $false) {
+  $input = New-Object DesktopWorkerWin32+INPUT
+  $input.type = $INPUT_KEYBOARD
+  $ki = New-Object DesktopWorkerWin32+KEYBDINPUT
+  $ki.wVk = [int16]$vk
+  $ki.wScan = 0
+  $ki.dwFlags = if ($keyUp) { $KEYEVENTF_KEYUP } else { 0 }
+  $ki.time = 0
+  $ki.dwExtraInfo = [DesktopWorkerWin32]::GetMessageExtraInfo()
+  $input.U = New-Object DesktopWorkerWin32+InputUnion
+  $input.U.ki = $ki
+  [void][DesktopWorkerWin32]::SendInput(1, @($input), [System.Runtime.InteropServices.Marshal]::SizeOf([type]'DesktopWorkerWin32+INPUT'))
 }
 
-function Handle-Request($req) {
-  $id = $req.id
-  $params = if ($req.params) { $req.params } else { @{} }
-  switch ($req.method) {
-    'listChromeWindows' {
-      $items = @()
-      foreach ($proc in Get-Process -ErrorAction SilentlyContinue) {
-        try {
-          if (@('chrome', 'msedge') -notcontains $proc.ProcessName.ToLower()) { continue }
-          if ($proc.MainWindowHandle -eq 0) { continue }
-          $hwnd = [IntPtr]::new($proc.MainWindowHandle)
-          if (-not [NativeMethods]::IsWindowVisible($hwnd)) { continue }
-          $title = Get-WindowTitle $hwnd
-          if ([string]::IsNullOrWhiteSpace($title)) { continue }
-          $items += Get-WindowObject $hwnd
-        } catch {}
+function Send-UnicodeChars([string]$text) {
+  foreach ($ch in $text.ToCharArray()) {
+    $down = New-Object DesktopWorkerWin32+INPUT
+    $down.type = $INPUT_KEYBOARD
+    $down.U = New-Object DesktopWorkerWin32+InputUnion
+    $down.U.ki = New-Object DesktopWorkerWin32+KEYBDINPUT
+    $down.U.ki.wVk = 0
+    $down.U.ki.wScan = [int][char]$ch
+    $down.U.ki.dwFlags = $KEYEVENTF_UNICODE
+    $up = New-Object DesktopWorkerWin32+INPUT
+    $up.type = $INPUT_KEYBOARD
+    $up.U = New-Object DesktopWorkerWin32+InputUnion
+    $up.U.ki = New-Object DesktopWorkerWin32+KEYBDINPUT
+    $up.U.ki.wVk = 0
+    $up.U.ki.wScan = [int][char]$ch
+    $up.U.ki.dwFlags = $KEYEVENTF_UNICODE -bor $KEYEVENTF_KEYUP
+    [void][DesktopWorkerWin32]::SendInput(2, @($down, $up), [System.Runtime.InteropServices.Marshal]::SizeOf([type]'DesktopWorkerWin32+INPUT'))
+  }
+}
+
+function Invoke-Click($x, $y, $button, [int]$count = 1) {
+  [void][DesktopWorkerWin32]::SetCursorPos([int]$x, [int]$y)
+  Start-Sleep -Milliseconds 40
+  for ($i = 0; $i -lt $count; $i++) {
+    switch ($button) {
+      'right' {
+        $downFlag = $MOUSEEVENTF_RIGHTDOWN; $upFlag = $MOUSEEVENTF_RIGHTUP
       }
-      return New-Success $id @{ windows = $items }
+      default {
+        $downFlag = $MOUSEEVENTF_LEFTDOWN; $upFlag = $MOUSEEVENTF_LEFTUP
+      }
+    }
+    $down = New-Object DesktopWorkerWin32+INPUT
+    $down.type = $INPUT_MOUSE
+    $down.U = New-Object DesktopWorkerWin32+InputUnion
+    $down.U.mi = New-Object DesktopWorkerWin32+MOUSEINPUT
+    $down.U.mi.dwFlags = $downFlag
+    $up = New-Object DesktopWorkerWin32+INPUT
+    $up.type = $INPUT_MOUSE
+    $up.U = New-Object DesktopWorkerWin32+InputUnion
+    $up.U.mi = New-Object DesktopWorkerWin32+MOUSEINPUT
+    $up.U.mi.dwFlags = $upFlag
+    [void][DesktopWorkerWin32]::SendInput(2, @($down, $up), [System.Runtime.InteropServices.Marshal]::SizeOf([type]'DesktopWorkerWin32+INPUT'))
+    Start-Sleep -Milliseconds 60
+  }
+}
+
+function Get-UiaRootFromWindow($window) {
+  if (-not $window) { return $null }
+  try {
+    return [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]::new([Int64]$window.handle))
+  } catch {
+    return $null
+  }
+}
+
+function Find-UiaByNameRole($window, $name, $role, $timeoutMs = 0) {
+  $deadline = [DateTime]::UtcNow.AddMilliseconds($timeoutMs)
+  do {
+    $root = Get-UiaRootFromWindow $window
+    if ($root) {
+      $conds = New-Object System.Collections.Generic.List[System.Windows.Automation.Condition]
+      if ($name) { $conds.Add((New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, [string]$name))) | Out-Null }
+      if ($role) {
+        $ctrlType = [System.Windows.Automation.ControlType]::$role
+        $conds.Add((New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $ctrlType))) | Out-Null
+      }
+      $condition = if ($conds.Count -eq 0) { [System.Windows.Automation.Condition]::TrueCondition } elseif ($conds.Count -eq 1) { $conds[0] } else { New-Object System.Windows.Automation.AndCondition($conds.ToArray()) }
+      $found = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+      if ($found) { return $found }
+    }
+    if ($timeoutMs -le 0) { break }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $deadline)
+  return $null
+}
+
+function Convert-UiaElement($element) {
+  if (-not $element) { return $null }
+  $rect = $element.Current.BoundingRectangle
+  [pscustomobject]@{
+    name = $element.Current.Name
+    role = $element.Current.ControlType.ProgrammaticName
+    automationId = $element.Current.AutomationId
+    hasKeyboardFocus = $element.Current.HasKeyboardFocus
+    rect = @{ x = [int]$rect.Left; y = [int]$rect.Top; width = [int]$rect.Width; height = [int]$rect.Height }
+  }
+}
+
+function Invoke-Method($method, $params) {
+  switch ($method) {
+    'listChromeWindows' {
+      $wins = Get-DesktopWindows | Where-Object { $_.processName -in @('chrome','msedge') }
+      return @{ windows = @($wins) }
     }
     'focusWindow' {
-      $hwnd = Find-Window $params
-      if ($hwnd -eq [IntPtr]::Zero -or $null -eq $hwnd) { return New-Error $id 'WINDOW_NOT_FOUND' 'Window not found.' }
-      [void][NativeMethods]::ShowWindowAsync($hwnd, $SwRestore)
-      [void][NativeMethods]::ShowWindowAsync($hwnd, $SwShow)
-      $ok = [NativeMethods]::SetForegroundWindow($hwnd)
-      if (-not $ok) { return New-Error $id 'FG_LOCKED' 'Failed to bring the target window to the foreground.' @{ hwnd = $hwnd.ToInt64().ToString() } }
-      return New-Success $id (Get-WindowObject $hwnd)
+      $window = Resolve-Window $params
+      if (-not $window) { throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Window not found.') }
+      [void][DesktopWorkerWin32]::ShowWindow([IntPtr]::new([Int64]$window.handle), $SW_RESTORE)
+      $ok = [DesktopWorkerWin32]::SetForegroundWindow([IntPtr]::new([Int64]$window.handle))
+      Start-Sleep -Milliseconds 120
+      if (-not $ok) { throw (New-ErrorResult 'FG_LOCKED' 'SetForegroundWindow returned false.' @{ handle = $window.handle }) }
+      return @{ window = $window }
     }
     'moveResizeWindow' {
-      $hwnd = Find-Window $params
-      if ($hwnd -eq [IntPtr]::Zero -or $null -eq $hwnd) { return New-Error $id 'WINDOW_NOT_FOUND' 'Window not found.' }
-      $ok = [NativeMethods]::SetWindowPos($hwnd, [IntPtr]::Zero, [int]$params.x, [int]$params.y, [int]$params.width, [int]$params.height, $SwpNoZOrder -bor $SwpShowWindow)
-      if (-not $ok) { return New-Error $id 'WINDOW_MOVE_FAILED' 'Failed to move/resize the target window.' }
-      return New-Success $id (Get-WindowObject $hwnd)
+      $window = Resolve-Window $params
+      if (-not $window) { throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Window not found.') }
+      $ok = [DesktopWorkerWin32]::SetWindowPos([IntPtr]::new([Int64]$window.handle), [IntPtr]::Zero, [int]$params.x, [int]$params.y, [int]$params.width, [int]$params.height, $SWP_NOZORDER)
+      if (-not $ok) { throw (New-ErrorResult 'WINDOW_MOVE_FAILED' 'SetWindowPos returned false.') }
+      $updated = Resolve-Window @{ handle = $window.handle }
+      return @{ window = $updated }
     }
     'getWindowRect' {
-      $hwnd = Find-Window $params
-      if ($hwnd -eq [IntPtr]::Zero -or $null -eq $hwnd) { return New-Error $id 'WINDOW_NOT_FOUND' 'Window not found.' }
-      return New-Success $id @{ hwnd = $hwnd.ToInt64().ToString(); rect = Get-WindowRectObject $hwnd }
+      $window = Resolve-Window $params
+      if (-not $window) { throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Window not found.') }
+      return @{ rect = $window.rect; window = $window }
     }
     'getForegroundWindow' {
-      $hwnd = [NativeMethods]::GetForegroundWindow()
-      if ($hwnd -eq [IntPtr]::Zero) { return New-Error $id 'NO_FOREGROUND_WINDOW' 'No foreground window is available.' }
-      return New-Success $id (Get-WindowObject $hwnd)
+      $window = Find-WindowByHandle([DesktopWorkerWin32]::GetForegroundWindow())
+      if (-not $window) { throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Foreground window not found.') }
+      return @{ window = $window }
     }
     'setClipboard' {
-      try {
-        [System.Windows.Forms.Clipboard]::SetText([string]$params.text)
-        return New-Success $id @{ ok = $true }
-      } catch {
-        return New-Error $id 'CLIPBOARD_FAILED' $_.Exception.Message
-      }
+      [System.Windows.Forms.Clipboard]::SetText([string]$params.text)
+      return @{ ok = $true }
     }
     'getClipboard' {
-      try {
-        $text = if ([System.Windows.Forms.Clipboard]::ContainsText()) { [System.Windows.Forms.Clipboard]::GetText() } else { '' }
-        return New-Success $id @{ text = $text }
-      } catch {
-        return New-Error $id 'CLIPBOARD_FAILED' $_.Exception.Message
-      }
+      $text = if ([System.Windows.Forms.Clipboard]::ContainsText()) { [System.Windows.Forms.Clipboard]::GetText() } else { '' }
+      return @{ text = $text }
     }
     'sendKeys' {
-      try {
-        [System.Windows.Forms.SendKeys]::SendWait([string]$params.keys)
-        return New-Success $id @{ ok = $true; keys = [string]$params.keys }
-      } catch {
-        return New-Error $id 'UIPI_BLOCKED' $_.Exception.Message
+      if ($params.text) {
+        Send-UnicodeChars([string]$params.text)
+      } else {
+        $mods = @($params.modifiers)
+        foreach ($mod in $mods) {
+          switch -Regex ($mod) {
+            'ctrl' { Send-KeyInput 0x11 }
+            'alt' { Send-KeyInput 0x12 }
+            'shift' { Send-KeyInput 0x10 }
+            'win' { Send-KeyInput 0x5B }
+          }
+        }
+        switch -Regex ([string]$params.key) {
+          '^enter$' { Send-KeyInput 0x0D; Send-KeyInput 0x0D $true }
+          '^v$' { Send-KeyInput 0x56; Send-KeyInput 0x56 $true }
+          '^c$' { Send-KeyInput 0x43; Send-KeyInput 0x43 $true }
+          '^l$' { Send-KeyInput 0x4C; Send-KeyInput 0x4C $true }
+          default { throw (New-ErrorResult 'UNSUPPORTED_KEY' "Unsupported key: $($params.key)") }
+        }
+        for ($i = $mods.Count - 1; $i -ge 0; $i--) {
+          switch -Regex ($mods[$i]) {
+            'ctrl' { Send-KeyInput 0x11 $true }
+            'alt' { Send-KeyInput 0x12 $true }
+            'shift' { Send-KeyInput 0x10 $true }
+            'win' { Send-KeyInput 0x5B $true }
+          }
+        }
       }
+      return @{ ok = $true }
     }
-    'click' { return New-Success $id (Invoke-Click $params 'left' $false) }
-    'doubleClick' { return New-Success $id (Invoke-Click $params 'left' $true) }
-    'rightClick' { return New-Success $id (Invoke-Click $params 'right' $false) }
+    'click' {
+      Invoke-Click $params.x $params.y 'left' 1
+      return @{ ok = $true }
+    }
+    'doubleClick' {
+      Invoke-Click $params.x $params.y 'left' 2
+      return @{ ok = $true }
+    }
+    'rightClick' {
+      Invoke-Click $params.x $params.y 'right' 1
+      return @{ ok = $true }
+    }
     'getUrlViaOmnibox' {
+      $saved = if ([System.Windows.Forms.Clipboard]::ContainsText()) { [System.Windows.Forms.Clipboard]::GetText() } else { '' }
       try {
-        $saved = if ([System.Windows.Forms.Clipboard]::ContainsText()) { [System.Windows.Forms.Clipboard]::GetText() } else { '' }
-        [System.Windows.Forms.SendKeys]::SendWait('^l')
-        Start-Sleep -Milliseconds ([int]($params.stepDelayMs ?? 80))
-        [System.Windows.Forms.SendKeys]::SendWait('^c')
-        Start-Sleep -Milliseconds ([int]($params.stepDelayMs ?? 80))
-        $url = if ([System.Windows.Forms.Clipboard]::ContainsText()) { [System.Windows.Forms.Clipboard]::GetText() } else { '' }
+        if ($params.titleHint -or $params.handle) { [void](Invoke-Method 'focusWindow' $params) }
+        [void](Invoke-Method 'sendKeys' @{ key = 'l'; modifiers = @('ctrl') })
+        Start-Sleep -Milliseconds 80
+        [void](Invoke-Method 'sendKeys' @{ key = 'c'; modifiers = @('ctrl') })
+        Start-Sleep -Milliseconds 80
+        $text = if ([System.Windows.Forms.Clipboard]::ContainsText()) { [System.Windows.Forms.Clipboard]::GetText() } else { '' }
+        return @{ url = $text }
+      } finally {
         [System.Windows.Forms.Clipboard]::SetText($saved)
-        if ([string]::IsNullOrWhiteSpace($url)) { return New-Error $id 'UIA_EMPTY' 'Omnibox copy returned an empty value.' }
-        return New-Success $id @{ url = $url }
-      } catch {
-        return New-Error $id 'CLIPBOARD_FAILED' $_.Exception.Message
       }
     }
     'uiaQueryByNameRole' {
-      try {
-        $item = Find-UiaElement $params
-        if ($null -eq $item) { return New-Error $id 'UIA_EMPTY' 'No matching UI Automation element was found.' }
-        return New-Success $id @{ name = $item.Current.Name; role = (Get-RoleName $item.Current.ControlType); automationId = $item.Current.AutomationId }
-      } catch {
-        return New-Error $id 'UIA_QUERY_FAILED' $_.Exception.Message
-      }
+      $window = Resolve-Window $params
+      if (-not $window) { throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Window not found.') }
+      $found = Find-UiaByNameRole $window $params.name $params.role ([int]$params.timeoutMs)
+      if (-not $found) { throw (New-ErrorResult 'UIA_EMPTY' 'UI Automation query returned no element.') }
+      return @{ element = (Convert-UiaElement $found) }
     }
     'uiaGetFocusedElement' {
       try {
-        $item = [System.Windows.Automation.AutomationElement]::FocusedElement
-        if ($null -eq $item) { return New-Error $id 'UIA_EMPTY' 'No focused UI Automation element was found.' }
-        return New-Success $id @{ name = $item.Current.Name; role = (Get-RoleName $item.Current.ControlType); automationId = $item.Current.AutomationId }
+        $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
       } catch {
-        return New-Error $id 'UIA_QUERY_FAILED' $_.Exception.Message
+        throw (New-ErrorResult 'UIA_EMPTY' 'No focused UI Automation element found.')
       }
+      if (-not $focused) { throw (New-ErrorResult 'UIA_EMPTY' 'No focused UI Automation element found.') }
+      return @{ element = (Convert-UiaElement $focused) }
     }
     'waitForWindow' {
-      $timeoutMs = [int]($params.timeoutMs ?? 5000)
-      $intervalMs = [int]($params.intervalMs ?? 150)
-      $found = Wait-Until $timeoutMs $intervalMs { Find-Window $params }
-      if ($null -eq $found -or $found -eq [IntPtr]::Zero) { return New-Error $id 'WINDOW_NOT_FOUND' 'Window was not found before timeout.' }
-      return New-Success $id (Get-WindowObject $found)
+      $timeoutMs = [int]($params.timeoutMs)
+      $deadline = [DateTime]::UtcNow.AddMilliseconds($timeoutMs)
+      do {
+        $window = Resolve-Window $params
+        if ($window) { return @{ window = $window } }
+        Start-Sleep -Milliseconds 100
+      } while ([DateTime]::UtcNow -lt $deadline)
+      throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Timed out waiting for window.')
     }
     'waitForElement' {
-      try {
-        $timeoutMs = [int]($params.timeoutMs ?? 5000)
-        $intervalMs = [int]($params.intervalMs ?? 150)
-        $item = Wait-Until $timeoutMs $intervalMs { Find-UiaElement $params }
-        if ($null -eq $item) { return New-Error $id 'UIA_EMPTY' 'Element was not found before timeout.' }
-        return New-Success $id @{ name = $item.Current.Name; role = (Get-RoleName $item.Current.ControlType); automationId = $item.Current.AutomationId }
-      } catch {
-        return New-Error $id 'UIA_QUERY_FAILED' $_.Exception.Message
-      }
+      $window = Resolve-Window $params
+      if (-not $window) { throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Window not found.') }
+      $found = Find-UiaByNameRole $window $params.name $params.role ([int]$params.timeoutMs)
+      if (-not $found) { throw (New-ErrorResult 'UIA_EMPTY' 'Timed out waiting for element.') }
+      return @{ element = (Convert-UiaElement $found) }
     }
     default {
-      return New-Error $id 'METHOD_NOT_FOUND' "Unknown method: $($req.method)"
+      throw (New-ErrorResult 'METHOD_NOT_FOUND' "Unknown method: $method")
     }
   }
 }
 
-while ($true) {
-  $line = [Console]::In.ReadLine()
-  if ($null -eq $line) { break }
+Write-WorkerLog @{ event = 'worker-start' }
+
+while (($line = [Console]::In.ReadLine()) -ne $null) {
   if ([string]::IsNullOrWhiteSpace($line)) { continue }
+  $request = $null
   try {
-    $req = $line | ConvertFrom-Json -Depth 20
-    $resp = Handle-Request $req
+    $request = $line | ConvertFrom-Json
+    $id = $request.id
+    $method = [string]$request.method
+    $params = if ($request.PSObject.Properties.Name -contains 'params') { $request.params } else { @{} }
+    Write-WorkerLog @{ event = 'request'; id = $id; method = $method }
+    $result = Invoke-Method $method $params
+    Write-JsonLine @{ jsonrpc = '2.0'; id = $id; result = $result }
+    Write-WorkerLog @{ event = 'response'; id = $id; method = $method; ok = $true }
   } catch {
-    $resp = New-Error $null 'INVALID_JSON' $_.Exception.Message
+    $id = if ($request) { $request.id } else { $null }
+    $payload = $null
+    if ($_.Exception.Message -match '^\{') {
+      try { $payload = $_.Exception.Message | ConvertFrom-Json } catch { $payload = $null }
+    }
+    if (-not $payload) {
+      $payload = @{ code = 'WORKER_ERROR'; message = $_.Exception.Message }
+    }
+    Write-JsonLine @{ jsonrpc = '2.0'; id = $id; error = $payload }
+    Write-WorkerLog @{ event = 'response'; id = $id; ok = $false; code = $payload.code; message = $payload.message }
   }
-  [Console]::Out.WriteLine(($resp | ConvertTo-Json -Compress -Depth 20))
-  [Console]::Out.Flush()
 }
+
+Write-WorkerLog @{ event = 'worker-stop' }

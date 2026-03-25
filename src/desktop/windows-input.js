@@ -1,89 +1,87 @@
-import { getDesktopWorkerClient } from './worker-client.js';
+import { getDesktopWorkerClient } from './powershell.js';
 
-async function invokeDesktop(method, params, step) {
-  const client = await getDesktopWorkerClient();
-  return client.invoke(method, params, { step });
+function client() {
+  return getDesktopWorkerClient();
 }
 
 export async function listChromeWindows() {
-  return invokeDesktop('listChromeWindows', {}, 'desktop-list-chrome-windows');
+  const result = await client().call('listChromeWindows', {}, { step: 'desktop-list-chrome-windows', timeoutMs: 8000 });
+  return result.windows || [];
 }
 
 export async function focusWindowByTitle(titleHint) {
-  return invokeDesktop('focusWindow', { titleHint }, 'desktop-focus-window');
+  return client().call('focusWindow', { titleHint }, { step: 'desktop-focus-window', timeoutMs: 8000 });
 }
 
-export async function focusWindow(params) {
-  return invokeDesktop('focusWindow', params, 'desktop-focus-window');
+export async function focusWindow(handle) {
+  return client().call('focusWindow', { handle }, { step: 'desktop-focus-window', timeoutMs: 8000 });
 }
 
-export async function moveResizeWindow(params) {
-  return invokeDesktop('moveResizeWindow', params, 'desktop-move-resize-window');
+export async function resizeWindow(targetBounds, handle = null) {
+  return client().call('moveResizeWindow', { handle, ...targetBounds }, { step: 'desktop-resize-window', timeoutMs: 8000 });
 }
 
-export async function getWindowRect(params) {
-  return invokeDesktop('getWindowRect', params, 'desktop-get-window-rect');
+export async function getWindowRect(handle) {
+  return client().call('getWindowRect', { handle }, { step: 'desktop-get-window-rect', timeoutMs: 5000 });
 }
 
 export async function getForegroundWindow() {
-  return invokeDesktop('getForegroundWindow', {}, 'desktop-get-foreground-window');
+  return client().call('getForegroundWindow', {}, { step: 'desktop-get-foreground-window', timeoutMs: 5000 });
 }
 
 export async function setClipboardText(text) {
-  return invokeDesktop('setClipboard', { text }, 'desktop-set-clipboard');
+  return client().call('setClipboard', { text }, { step: 'desktop-set-clipboard', timeoutMs: 5000 });
 }
 
 export async function getClipboardText() {
-  return invokeDesktop('getClipboard', {}, 'desktop-get-clipboard');
+  return client().call('getClipboard', {}, { step: 'desktop-get-clipboard', timeoutMs: 5000 });
 }
 
-export async function sendKeys(keys) {
-  return invokeDesktop('sendKeys', { keys }, 'desktop-send-keys');
+export async function sendKeys(keys, modifiers = []) {
+  if (typeof keys === 'string' && !['enter', 'v', 'c', 'l'].includes(keys.toLowerCase()) && modifiers.length === 0) {
+    return client().call('sendKeys', { text: keys }, { step: 'desktop-send-keys', timeoutMs: 5000 });
+  }
+  return client().call('sendKeys', { key: keys, modifiers }, { step: 'desktop-send-keys', timeoutMs: 5000 });
 }
 
 export async function pasteClipboard() {
-  return sendKeys('^v');
+  return sendKeys('v', ['ctrl']);
 }
 
 export async function pressEnter() {
-  return sendKeys('~');
-}
-
-export async function resizeWindow(targetBounds) {
-  const foreground = await getForegroundWindow();
-  return moveResizeWindow({ hwnd: foreground.hwnd, ...targetBounds });
+  return sendKeys('enter');
 }
 
 export async function clickPoint(point) {
-  return invokeDesktop('click', { x: Math.round(point.x), y: Math.round(point.y) }, 'desktop-click-point');
+  return client().call('click', { x: Math.round(point.x), y: Math.round(point.y) }, { step: 'desktop-click-point', timeoutMs: 5000 });
 }
 
 export async function doubleClickPoint(point) {
-  return invokeDesktop('doubleClick', { x: Math.round(point.x), y: Math.round(point.y) }, 'desktop-double-click-point');
+  return client().call('doubleClick', { x: Math.round(point.x), y: Math.round(point.y) }, { step: 'desktop-double-click-point', timeoutMs: 5000 });
 }
 
 export async function rightClickPoint(point) {
-  return invokeDesktop('rightClick', { x: Math.round(point.x), y: Math.round(point.y) }, 'desktop-right-click-point');
+  return client().call('rightClick', { x: Math.round(point.x), y: Math.round(point.y) }, { step: 'desktop-right-click-point', timeoutMs: 5000 });
 }
 
-export async function getUrlViaOmnibox(params = {}) {
-  return invokeDesktop('getUrlViaOmnibox', params, 'desktop-get-url-via-omnibox');
+export async function getUrlViaOmnibox(target = {}) {
+  return client().call('getUrlViaOmnibox', target, { step: 'desktop-get-url-omnibox', timeoutMs: 8000 });
 }
 
-export async function uiaQueryByNameRole(params) {
-  return invokeDesktop('uiaQueryByNameRole', params, 'desktop-uia-query-by-name-role');
+export async function uiaQueryByNameRole(target = {}, query = {}) {
+  return client().call('uiaQueryByNameRole', { ...target, ...query }, { step: 'desktop-uia-query', timeoutMs: query.timeoutMs || 5000 });
 }
 
 export async function uiaGetFocusedElement() {
-  return invokeDesktop('uiaGetFocusedElement', {}, 'desktop-uia-get-focused-element');
+  return client().call('uiaGetFocusedElement', {}, { step: 'desktop-uia-focused', timeoutMs: 5000 });
 }
 
-export async function waitForWindow(params) {
-  return invokeDesktop('waitForWindow', params, 'desktop-wait-for-window');
+export async function waitForWindow(target = {}, timeoutMs = 5000) {
+  return client().call('waitForWindow', { ...target, timeoutMs }, { step: 'desktop-wait-window', timeoutMs: timeoutMs + 1000 });
 }
 
-export async function waitForElement(params) {
-  return invokeDesktop('waitForElement', params, 'desktop-wait-for-element');
+export async function waitForElement(target = {}, query = {}, timeoutMs = 5000) {
+  return client().call('waitForElement', { ...target, ...query, timeoutMs }, { step: 'desktop-wait-element', timeoutMs: timeoutMs + 1000 });
 }
 
 export async function delay(ms) {

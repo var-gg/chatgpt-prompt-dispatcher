@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { submitChatgpt } from '../src/submit-chatgpt.js';
 
+process.env.SKIP_BROWSER_AUTOMATION = '1';
+
 test('submitChatgpt returns a dry-run receipt', async () => {
   const receipt = await submitChatgpt([
     '--prompt',

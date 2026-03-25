@@ -25,5 +25,8 @@
     "skill"
   ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.52.0"
+  }
 }

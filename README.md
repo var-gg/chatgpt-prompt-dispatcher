@@ -65,6 +65,16 @@ Example:
 - Screenshots and failure artifacts are written under `artifacts/` and are gitignored.
 - Receipts include `notes` entries for `logPath` and `lastStep`.
 
+## Packaging and Host Integration
+
+- `npm run pack-skill`
+  - builds a shareable bundle under `dist/skill-bundle/`
+  - creates `dist/chatgpt-web-submit-bundle.zip`
+- `npm run install-local -- --mode symlink`
+- `npm run install-local -- --mode copy --target <path>`
+
+Install metadata is tracked in `skill.install.lock.json`.
+
 ## Explicit Non-Goal
 
 - Response collection/scraping is intentionally **not implemented**.

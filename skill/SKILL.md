@@ -1,31 +1,55 @@
 ---
 name: chatgpt-web-submit
-description: Dispatch a prompt into a logged-in ChatGPT web session through visible browser automation on Windows. Use when the task is to open a new chat or enter a specified ChatGPT Project and submit a prompt, optionally handling attachment-menu interaction, without reading responses or using unofficial APIs.
+description: Submit prepared prompts into a locally logged-in ChatGPT web session through visible browser automation on Windows. Use when the task is only to open ChatGPT Web, optionally enter a specific Project, optionally attach files through the visible menu, choose a supported mode, and submit the prompt. Do not use when the task requires reading replies, scraping responses, calling unofficial APIs, automating login, extracting cookies/tokens/session data, or interacting with hidden/internal endpoints.
 ---
 
 # chatgpt-web-submit
 
-Use this skill to dispatch prompts into the ChatGPT web UI through visible browser automation only.
+Use this skill only for **prompt submission** in a local, already logged-in browser session.
 
-## Rules
+## Core Boundary
 
-- Stay inside visible browser interaction boundaries.
-- Do not read or scrape responses.
-- Do not automate login.
-- Do not call unofficial APIs or internal endpoints.
-- Do not extract cookies, tokens, or browser session material.
+This skill **submits** a prepared prompt to ChatGPT Web in a local logged-in browser.
 
-## Repository Model
+It does **not**:
+- read the assistant response
+- scrape page output
+- call unofficial APIs or internal endpoints
+- automate login
+- export or inspect cookies, tokens, or browser session storage
 
-- The repository root is the source of truth.
-- This `skill/` directory is the portable install bundle.
-- Runtime state must live outside the portable bundle.
+## Use This Skill When
+
+- You already have a local logged-in browser session.
+- You want to submit a prompt into ChatGPT Web.
+- You may need to enter a specific ChatGPT Project first.
+- You may need to attach files through the visible attachment/tools menu.
+- You need a submission receipt JSON instead of model output.
+
+## Do Not Use This Skill When
+
+- You need the model's answer text.
+- You need response scraping, DOM extraction, or transcript capture.
+- You need API-style ChatGPT access.
+- The user is not logged in and expects the agent to log in for them.
+- The task depends on cookie reuse, account export, token capture, or hidden browser/session inspection.
+
+## Runtime Model
+
+- Repository root = source of truth
+- `skill/` = portable install bundle
+- runtime state = separate, outside the portable bundle
 
 ## References
 
-- Read `references/architecture.md` for package layout and separation principles.
-- Read `references/boundaries.md` for allowed vs forbidden behavior.
+Read as needed:
+- `references/install.md` for packaging/install/materialization
+- `references/profiles.md` for adding locale/platform/tier profiles
+- `references/known-limitations.md` for current boundaries and expected UI drift
 
-## Scripts
+## Execution Notes
 
-- Use `scripts/install-local.ps1` as the placeholder local materialization entrypoint.
+- Prefer `submit-chatgpt` / `npm run submit -- ...` through the host adapter.
+- Return the submission receipt JSON only.
+- If login is missing, wait for manual login through the visible browser UI.
+- Preserve screenshots/logs in runtime artifacts, not in the bundle.

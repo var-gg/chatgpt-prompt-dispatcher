@@ -39,7 +39,7 @@ export async function createPlaywrightAutomationSession({ profile, args, screens
 
   return {
     async launchPersistentBrowser() {
-      const channels = ['msedge', 'chrome'];
+      const channels = ['chrome', 'msedge'];
       let lastError = null;
       for (const channel of channels) {
         try {

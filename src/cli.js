@@ -1,6 +1,7 @@
 import { loadProfile } from './profile-loader.js';
 import { validateConfig } from './config-schema.js';
 import { submitChatgpt } from './submit-chatgpt.js';
+import { runSmoke } from './smoke.js';
 
 /**
  * CLI entrypoint scaffold.
@@ -22,7 +23,7 @@ export async function runCli(argv = []) {
   }
 
   if (command === 'smoke') {
-    console.log('Smoke scaffold OK');
+    await runSmoke(argv.slice(1));
     return;
   }
 

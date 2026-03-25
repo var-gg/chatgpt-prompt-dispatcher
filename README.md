@@ -43,6 +43,32 @@ Primary command forms:
 
 Submission output is always a JSON receipt. It reports submission metadata only and does **not** include response scraping.
 
+## Test Strategy
+
+- `npm test`
+  - unit tests only
+  - argument parsing, profile interpretation, flow planning, and receipt generation
+  - includes smoke command gating verification without launching a real browser
+- `npm run smoke`
+  - live smoke entrypoint
+  - does nothing by default unless `LIVE_CHATGPT=1` is explicitly set
+  - intended for visible local browser checks only
+
+Example:
+
+- `npm test`
+- `LIVE_CHATGPT=1 npm run smoke -- --prompt "테스트" --profile ko-KR.windows.pro --dry-run`
+
+## Observability
+
+- Structured execution logs are written as JSONL under `artifacts/logs/`.
+- Screenshots and failure artifacts are written under `artifacts/` and are gitignored.
+- Receipts include `notes` entries for `logPath` and `lastStep`.
+
+## Explicit Non-Goal
+
+- Response collection/scraping is intentionally **not implemented**.
+
 ## Status
 
 - Repository scaffolded.

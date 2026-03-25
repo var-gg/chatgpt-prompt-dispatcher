@@ -6,6 +6,7 @@ import { parseSubmitArgs } from './args.js';
 import { StepError, ERROR_CODES } from './errors.js';
 import { createReceipt, createFailureReceipt } from './receipt.js';
 import { buildFlowPlan } from './browser-flow.js';
+import { defaultLogPath, writeJsonlLog } from './logger.js';
 
 const CHATGPT_URL = 'https://chatgpt.com/';
 const SUPPORTED_MODES = new Set(['auto', 'latest', 'instant', 'thinking', 'pro']);
@@ -13,16 +14,21 @@ const SUPPORTED_MODES = new Set(['auto', 'latest', 'instant', 'thinking', 'pro']
 export async function submitChatgpt(argv = []) {
   let screenshotPath = null;
   let currentUrl = CHATGPT_URL;
+  let lastStep = 'start';
+  let logPath = null;
   const notes = [];
 
   try {
     const args = await parseSubmitArgs(argv);
+    lastStep = 'load-profile';
     const profile = validateConfig(await loadProfile(args.profile));
     const modeResolved = resolveMode(args.mode);
     const projectResolved = args.project || null;
     const flowPlan = buildFlowPlan(profile, { ...args, mode: modeResolved, project: projectResolved });
     screenshotPath = resolveScreenshotPath(args.screenshotPath, args.profile);
+    logPath = defaultLogPath(args.profile);
 
+    await writeJsonlLog(logPath, { step: 'init', profile: args.profile, modeResolved, projectResolved, dryRun: args.dryRun, attachmentCount: args.attachments.length });
     notes.push(`profile=${args.profile}`);
     notes.push(`uiTier=${flowPlan.tier}`);
     if (args.browserProfileDir) {
@@ -32,6 +38,7 @@ export async function submitChatgpt(argv = []) {
     }
 
     if (args.dryRun) {
+      lastStep = 'dry-run-plan';
       notes.push('dryRun=true');
       notes.push(`wouldNavigate=${CHATGPT_URL}`);
       notes.push(`projectAction=${flowPlan.project.action}`);
@@ -41,8 +48,11 @@ export async function submitChatgpt(argv = []) {
       if (args.attachments.length) notes.push(`wouldAttachFiles=${args.attachments.length}`);
       notes.push(`promptLength=${args.prompt.length}`);
       await captureDryRunScreenshot(screenshotPath, flowPlan);
+      await writeJsonlLog(logPath, { step: 'dry-run-ready', lastStep, screenshotPath, flowPlanProfile: flowPlan.profileName, flowPlanLocale: flowPlan.locale });
       notes.push(`flowPlanProfile=${flowPlan.profileName}`);
       notes.push(`flowPlanLocale=${flowPlan.locale}`);
+      notes.push(`logPath=${logPath}`);
+      notes.push(`lastStep=${lastStep}`);
       return createReceipt({
         submitted: false,
         modeResolved,
@@ -56,27 +66,49 @@ export async function submitChatgpt(argv = []) {
     const automation = await createAutomationSession({ profile, args, screenshotPath, notes });
 
     try {
+      lastStep = 'launch-browser';
       await automation.launchPersistentBrowser();
+      await writeJsonlLog(logPath, { step: lastStep });
+      lastStep = 'navigate-chatgpt';
       await automation.navigateToChatgpt();
       currentUrl = CHATGPT_URL;
+      await writeJsonlLog(logPath, { step: lastStep, url: currentUrl });
+      lastStep = 'ensure-login';
       await automation.ensureLoggedInOrWait();
+      await writeJsonlLog(logPath, { step: lastStep });
       if (projectResolved) {
+        lastStep = 'select-project';
         await automation.selectProject(projectResolved);
+        await writeJsonlLog(logPath, { step: lastStep, projectResolved });
       }
       if (args.newChat) {
+        lastStep = 'start-new-chat';
         await automation.startNewChat();
+        await writeJsonlLog(logPath, { step: lastStep });
       }
+      lastStep = 'select-mode';
       await automation.selectMode(modeResolved);
+      await writeJsonlLog(logPath, { step: lastStep, modeResolved });
       if (args.attachments.length) {
+        lastStep = 'attach-files';
         await automation.attachFiles(args.attachments);
+        await writeJsonlLog(logPath, { step: lastStep, attachmentCount: args.attachments.length });
       }
+      lastStep = 'input-prompt';
       await automation.inputPrompt(args.prompt);
+      await writeJsonlLog(logPath, { step: lastStep, promptLength: args.prompt.length });
+      lastStep = 'submit-prompt';
       await automation.submitPrompt();
+      await writeJsonlLog(logPath, { step: lastStep });
+      lastStep = 'capture-screenshot';
       await automation.captureScreenshot();
+      await writeJsonlLog(logPath, { step: lastStep, screenshotPath });
     } finally {
       await automation.close();
     }
 
+    notes.push(`logPath=${logPath}`);
+    notes.push(`lastStep=${lastStep}`);
     return createReceipt({
       submitted: true,
       modeResolved,
@@ -88,7 +120,14 @@ export async function submitChatgpt(argv = []) {
   } catch (error) {
     const normalizedError = error instanceof StepError
       ? error
-      : new StepError(error?.code || 'UNEXPECTED_ERROR', error?.step || 'unknown', error?.message || String(error));
+      : new StepError(error?.code || 'UNEXPECTED_ERROR', error?.step || lastStep || 'unknown', error?.message || String(error));
+    if (logPath) {
+      await writeJsonlLog(logPath, { step: 'failure', lastStep, code: normalizedError.code, message: normalizedError.message, screenshotPath });
+    }
+    notes.push(`lastStep=${lastStep}`);
+    if (logPath) {
+      notes.push(`logPath=${logPath}`);
+    }
     const failure = createFailureReceipt({
       error: normalizedError,
       screenshotPath,

@@ -546,17 +546,13 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
     const directProof = await waitForPromptPresence(handle, prompt, stepDelayMs, 'uia-focus+unicode-sendkeys');
     if (directProof.ok) {
       const visibleProof = await waitForVisibleSendState(handle, prompt, beforeSubmitState, stepDelayMs, 'uia-focus+unicode-sendkeys');
-      return {
-        method: 'uia-focus+unicode-sendkeys+visible-send-state',
+      return mergePromptInsertionProof({
+        baseMethod: 'uia-focus+unicode-sendkeys',
         expectedHash,
-        actualHash: hashText(directProof.text),
-        focusedElement: visibleProof.focusedElement || directProof.focusedElement,
-        composerElement: visibleProof.composerElement || directProof.element,
-        proof: visibleProof.proof,
-        composerTextSample: directProof.text.slice(0, 200),
-        beforeSubmitState,
-        afterSubmitState: visibleProof.submitState
-      };
+        promptProof: directProof,
+        visibleProof,
+        beforeSubmitState
+      });
     }
 
     await refocusComposer(handle, promptFocus, stepDelayMs);
@@ -566,17 +562,13 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
     const clipboardProof = await waitForPromptPresence(handle, prompt, stepDelayMs, 'uia-focus+clipboard-paste');
     if (clipboardProof.ok) {
       const visibleProof = await waitForVisibleSendState(handle, prompt, beforeSubmitState, stepDelayMs, 'uia-focus+clipboard-paste');
-      return {
-        method: 'uia-focus+clipboard-paste+visible-send-state',
+      return mergePromptInsertionProof({
+        baseMethod: 'uia-focus+clipboard-paste',
         expectedHash,
-        actualHash: hashText(clipboardProof.text),
-        focusedElement: visibleProof.focusedElement || clipboardProof.focusedElement,
-        composerElement: visibleProof.composerElement || clipboardProof.element,
-        proof: visibleProof.proof,
-        composerTextSample: clipboardProof.text.slice(0, 200),
-        beforeSubmitState,
-        afterSubmitState: visibleProof.submitState
-      };
+        promptProof: clipboardProof,
+        visibleProof,
+        beforeSubmitState
+      });
     }
   } catch {
     // fall through to machine-specific coordinate proof path
@@ -584,17 +576,13 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
 
   const coordinateProof = await insertPromptViaCoordinateProof(prompt, stepDelayMs);
   const visibleProof = await waitForVisibleSendState(handle, prompt, beforeSubmitState, stepDelayMs, coordinateProof.method);
-  return {
-    method: coordinateProof.method,
+  return mergePromptInsertionProof({
+    baseMethod: coordinateProof.method,
     expectedHash,
-    actualHash: coordinateProof.actualHash,
-    focusedElement: visibleProof.focusedElement || coordinateProof.focusedElement,
-    composerElement: visibleProof.composerElement || coordinateProof.composerElement,
-    proof: visibleProof.proof,
-    composerTextSample: coordinateProof.composerTextSample,
-    beforeSubmitState,
-    afterSubmitState: visibleProof.submitState
-  };
+    promptProof: coordinateProof,
+    visibleProof,
+    beforeSubmitState
+  });
 }
 
 async function waitForPromptPresence(handle, prompt, stepDelayMs, method) {
@@ -614,6 +602,23 @@ async function waitForPromptPresence(handle, prompt, stepDelayMs, method) {
     throwOnFailure: false
   });
   return result;
+}
+
+function mergePromptInsertionProof({ baseMethod, expectedHash, promptProof, visibleProof, beforeSubmitState }) {
+  const visibleTransitionProven = Boolean(visibleProof?.ok);
+  const methodSuffix = visibleTransitionProven ? '+visible-send-state' : '+submit-attempt-ready';
+  return {
+    method: `${baseMethod}${methodSuffix}`,
+    expectedHash,
+    actualHash: hashText(promptProof?.text || ''),
+    focusedElement: visibleProof?.focusedElement || promptProof?.focusedElement || null,
+    composerElement: visibleProof?.composerElement || visibleProof?.element || promptProof?.composerElement || promptProof?.element || null,
+    proof: visibleProof?.proof || promptProof?.proof || `${baseMethod}+composerTextContainsPrompt`,
+    composerTextSample: String(promptProof?.text || promptProof?.composerTextSample || '').slice(0, 200),
+    beforeSubmitState,
+    afterSubmitState: visibleProof?.submitState || beforeSubmitState,
+    visibleSendStateProven: visibleTransitionProven
+  };
 }
 
 async function validatePromptInput(handle, prompt, promptFocus, insertion, stepDelayMs) {
@@ -637,20 +642,21 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
       const promptPresent = proof.text.includes(prompt);
       const sendTransitionProven = hasVisibleSendStateTransition(insertion?.beforeSubmitState, submitState);
       return {
-        ok: promptPresent && sendTransitionProven,
+        ok: promptPresent,
         proof: promptPresent
-          ? (sendTransitionProven ? 'visibleSendButtonTransitionProven' : 'promptPresentButVisibleSendStateUnproven')
+          ? (sendTransitionProven ? 'visibleSendButtonTransitionProven' : 'promptPresentComposerCredibleVisibleSendStateUnproven')
           : 'composerTextStillHydrating',
         ...proof,
-        submitState
+        submitState,
+        sendTransitionProven
       };
     },
     failureCode: 'PROMPT_VALIDATION_FAILED',
-    failureMessage: 'ChatGPT prompt input was not visibly proven by the send-button state transition.'
+    failureMessage: 'Prompt was not confirmed in the ChatGPT composer.'
   });
 
   return {
-    method: `${insertion?.method || 'unknown'}+visible-send-proof`,
+    method: `${insertion?.method || 'unknown'}+composer-present-proof`,
     expectedHash,
     actualHash: hashText(verifiedProof.text),
     clipboardHash: expectedHash,
@@ -659,7 +665,8 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
     proof: verifiedProof.proof,
     composerTextSample: verifiedProof.text.slice(0, 200),
     beforeSubmitState: insertion?.beforeSubmitState,
-    afterSubmitState: verifiedProof.submitState
+    afterSubmitState: verifiedProof.submitState,
+    visibleSendStateProven: Boolean(verifiedProof.sendTransitionProven)
   };
 }
 
@@ -831,36 +838,40 @@ function looksLikeComposerElement(element) {
 async function submitPrompt(handle, submitPoint, stepDelayMs, prompt, promptFocus, preferredMethod = 'click') {
   const ready = await verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs);
   const before = ready.sample;
+  const plannedMethods = buildSubmitAttemptOrder(preferredMethod, before.submitButton);
   let method = null;
+  let after = null;
 
-  if (isSendableSubmitState(before.submitButton)) {
-    method = preferredMethod === 'enter'
-      ? 'enter'
-      : await submitViaVisibleSendButton(handle, submitPoint, stepDelayMs);
-  } else {
-    throw new StepError('SUBMIT_PRECHECK_FAILED', 'submit-prompt-precheck', 'Visible send button was not proven before submit.', { before });
+  for (const plannedMethod of plannedMethods) {
+    if (plannedMethod === 'click' && !isSendableSubmitState(before.submitButton)) {
+      continue;
+    }
+    method = await attemptSubmitMethod(handle, submitPoint, stepDelayMs, plannedMethod);
+    if (!method) {
+      continue;
+    }
+    after = await waitForSubmitEvidence(handle, prompt, before, stepDelayMs);
+    if (after?.ok) {
+      break;
+    }
   }
 
   if (!method) {
-    throw new StepError('SUBMIT_FAILED', 'submit-prompt', 'Failed to activate the visible send button.', { before });
+    throw new StepError('SUBMIT_FAILED', 'submit-prompt', 'Failed to trigger a practical submit attempt.', { before, plannedMethods });
   }
-
-  if (method === 'enter') {
-    await pressEnter();
-    await delay(stepDelayMs * 2);
-  }
-
-  const after = await waitForSubmitEvidence(handle, prompt, before, stepDelayMs);
 
   return {
     method,
-    proof: after.proof,
-    composerTextSample: String(after.composerText || '').slice(0, 200),
-    focusedElement: after.focusedElement,
-    composerElement: after.composerElement,
+    proof: after?.proof || 'submitAttemptMadeButUiProofUnavailable',
+    composerTextSample: String(after?.composerText || '').slice(0, 200),
+    focusedElement: after?.focusedElement || before.focusedElement,
+    composerElement: after?.composerElement || before.composerElement,
     beforeSubmitButton: before.submitButton?.name || null,
-    afterSubmitButton: after.submitButton?.name || null,
-    stopButton: after.stopButton?.name || null
+    afterSubmitButton: after?.submitButton?.name || null,
+    stopButton: after?.stopButton?.name || null,
+    submitAttempted: method !== null,
+    readyProof: ready.proof,
+    sendButtonVisibleBeforeSubmit: isSendableSubmitState(before.submitButton)
   };
 }
 
@@ -916,7 +927,7 @@ async function waitForVisibleSendState(handle, prompt, beforeState, stepDelayMs,
       return {
         ok: promptPresent && transitioned,
         proof: promptPresent
-          ? (transitioned ? `${method}+visibleSendButtonTransition` : `${method}+waitingForVisibleSendButtonTransition`)
+          ? (transitioned ? `${method}+visibleSendButtonTransition` : `${method}+visibleSendButtonTransitionUnproven`)
           : `${method}+composerTextPending`,
         text: proof.text,
         element: proof.element,
@@ -924,8 +935,7 @@ async function waitForVisibleSendState(handle, prompt, beforeState, stepDelayMs,
         submitState
       };
     },
-    failureCode: 'PROMPT_VALIDATION_FAILED',
-    failureMessage: 'ChatGPT did not visibly switch from its idle composer control to the send-button state.'
+    throwOnFailure: false
   });
 }
 
@@ -983,15 +993,15 @@ async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs) {
         stopButtonEnabled: false
       };
       return {
-        ok: promptPresent && sendable,
+        ok: promptPresent,
         proof: promptPresent
-          ? (sendable ? 'composerContainsPromptAndSendable' : 'composerContainsPromptButNotSendable')
+          ? (sendable ? 'composerContainsPromptAndSendable' : 'composerContainsPromptSubmitStateDegraded')
           : 'composerMissingExpectedPrompt',
         sample
       };
     },
     failureCode: 'SUBMIT_PRECHECK_FAILED',
-    failureMessage: 'Prompt was not visibly present in the ChatGPT composer in a sendable state before submit.'
+    failureMessage: 'Prompt was not confirmed in the ChatGPT composer before submit.'
   });
 }
 
@@ -1014,6 +1024,24 @@ async function waitForSubmitEvidence(handle, prompt, before, stepDelayMs) {
     },
     throwOnFailure: false
   });
+}
+
+function buildSubmitAttemptOrder(preferredMethod, submitButton) {
+  const first = preferredMethod === 'enter' ? 'enter' : (isSendableSubmitState(submitButton) ? 'click' : 'enter');
+  const second = first === 'enter' ? 'click' : 'enter';
+  return [first, second];
+}
+
+async function attemptSubmitMethod(handle, submitPoint, stepDelayMs, method) {
+  if (method === 'enter') {
+    await pressEnter();
+    await delay(stepDelayMs * 2);
+    return 'enter';
+  }
+  if (method === 'click') {
+    return submitViaVisibleSendButton(handle, submitPoint, stepDelayMs);
+  }
+  return null;
 }
 
 function deriveSubmitProof(before, after, prompt) {
@@ -1220,6 +1248,7 @@ export const __desktopSubmitInternals = {
   looksLikePromptEcho,
   deriveSubmitProof,
   hasVisibleSendStateTransition,
+  buildSubmitAttemptOrder,
   looksLikeStopButton,
   hashText,
   normalizeAddressValue,

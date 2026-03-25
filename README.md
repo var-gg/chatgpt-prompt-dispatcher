@@ -21,8 +21,8 @@ The repo is **desktop-first**:
 - Focus a visible local ChatGPT window.
 - Validate or repair navigation to `https://chatgpt.com/`.
 - Paste a prepared prompt through Windows desktop input dispatch.
-- Validate prompt input deterministically.
-- Optionally submit through Enter-first / send-button fallback.
+- Validate prompt input against a credible ChatGPT composer target, while tolerating degraded visible send-state proof.
+- Attempt submission immediately once the composer is credibly reached, using Enter-first / send-button fallback as needed.
 - Return a submission receipt JSON instead of response content.
 
 ## Non-Goals

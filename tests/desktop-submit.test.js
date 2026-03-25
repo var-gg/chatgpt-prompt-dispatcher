@@ -10,6 +10,7 @@ const {
   looksLikePromptEcho,
   deriveSubmitProof,
   hasVisibleSendStateTransition,
+  buildSubmitAttemptOrder,
   hashText,
   normalizeAddressValue,
   isRectClose
@@ -130,6 +131,12 @@ test('hasVisibleSendStateTransition requires a real idle-to-send UI change', () 
     { sendable: true, stopVisible: false, submitSignature: '{"name":"Send"}' },
     { sendable: true, stopVisible: false, submitSignature: '{"name":"Send"}' }
   ), false);
+});
+
+test('buildSubmitAttemptOrder prefers practical enter fallback when send button is not proven', () => {
+  assert.deepEqual(buildSubmitAttemptOrder('click', null), ['enter', 'click']);
+  assert.deepEqual(buildSubmitAttemptOrder('click', { name: 'Send', isEnabled: true }), ['click', 'enter']);
+  assert.deepEqual(buildSubmitAttemptOrder('enter', { name: 'Send', isEnabled: true }), ['enter', 'click']);
 });
 
 test('deriveSubmitProof prefers strong post-submit UI signals', () => {

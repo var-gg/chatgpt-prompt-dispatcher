@@ -51,5 +51,6 @@ Read as needed:
 
 - Prefer `submit-chatgpt` / `npm run submit -- ...`.
 - Treat `submit-browser-chatgpt` / `--transport=browser` as experimental compatibility paths.
+- Desktop submit is optimized for practical prompt paste+submit attempts: once a credible ChatGPT composer target is reached, it proceeds even if visible send-state proof is degraded, while still rejecting obviously wrong/omnibox targets.
 - Use `inspect-desktop-chatgpt` and `calibrate-desktop-chatgpt` before reaching for browser fallback when the desktop UI drifts.
 - Return the submission receipt JSON only.

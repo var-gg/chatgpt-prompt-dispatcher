@@ -9,7 +9,9 @@ const {
   looksLikeComposerElement,
   looksLikePromptEcho,
   deriveSubmitProof,
-  hashText
+  hashText,
+  normalizeAddressValue,
+  isRectClose
 } = __desktopSubmitInternals;
 
 test('isLikelyOmniboxElement rejects Chrome address bar candidates', () => {
@@ -129,4 +131,24 @@ test('deriveSubmitProof prefers strong post-submit UI signals', () => {
     { composerText: '', submitButton: { name: 'Send' }, stopButton: null },
     'hello'
   ), 'composerClearedOrChangedAfterSubmit');
+});
+
+test('normalizeAddressValue canonicalizes chatgpt URLs for omnibox verification', () => {
+  assert.equal(normalizeAddressValue('https://chatgpt.com'), normalizeAddressValue('https://chatgpt.com'));
+  assert.equal(normalizeAddressValue('HTTPS://CHATGPT.COM///'), normalizeAddressValue('https://chatgpt.com/'));
+  assert.equal(normalizeAddressValue(' https://chatgpt.com/c/abc/ '), normalizeAddressValue('https://chatgpt.com/c/abc/'));
+});
+
+test('isRectClose tolerates small window settling drift only', () => {
+  assert.equal(isRectClose(
+    { x: 101, y: 99, width: 1202, height: 797 },
+    { x: 100, y: 100, width: 1200, height: 800 },
+    3
+  ), true);
+
+  assert.equal(isRectClose(
+    { x: 110, y: 100, width: 1200, height: 800 },
+    { x: 100, y: 100, width: 1200, height: 800 },
+    3
+  ), false);
 });

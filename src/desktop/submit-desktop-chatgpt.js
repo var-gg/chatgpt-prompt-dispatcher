@@ -10,6 +10,7 @@ import {
   delay,
   focusWindow,
   getClipboardText,
+  getForegroundWindow,
   getUrlViaOmnibox,
   getWindowRect,
   pasteClipboard,
@@ -20,6 +21,7 @@ import {
   setClipboardText,
   uiaGetFocusedElement,
   uiaInvoke,
+  uiaQuery,
   uiaReadText,
   uiaSetFocus
 } from './windows-input.js';
@@ -118,23 +120,25 @@ export async function submitDesktopChatgpt(argv = []) {
     await writeJsonlLog(logPath, { step: lastStep, selectedWindow, targetEvidence: windowSelection.evidence, candidates: windowSelection.candidates });
 
     lastStep = 'focus-window';
-    await focusWindow(selectedWindow.handle);
-    await delay(args.stepDelayMs);
-    await writeJsonlLog(logPath, { step: lastStep, handle: selectedWindow.handle });
+    const focusWindowResult = await stabilizeWindowFocus(selectedWindow.handle, args.stepDelayMs);
+    await writeJsonlLog(logPath, { step: lastStep, handle: selectedWindow.handle, focusWindowResult });
+    notes.push(`windowFocusProof=${focusWindowResult.proof}`);
 
     lastStep = 'normalize-window';
     await resizeWindow(targetBounds, selectedWindow.handle);
-    await delay(args.stepDelayMs);
-    lastWindow = (await getWindowRect(selectedWindow.handle)).window;
-    await writeJsonlLog(logPath, { step: lastStep, window: lastWindow });
+    const normalizedWindow = await waitForWindowRectStability(selectedWindow.handle, targetBounds, args.stepDelayMs);
+    lastWindow = normalizedWindow.window;
+    await writeJsonlLog(logPath, { step: lastStep, window: lastWindow, normalizedWindow });
 
     lastStep = 'navigate-chatgpt';
-    await navigateToChatGpt(CHATGPT_URL, args.stepDelayMs);
-    await writeJsonlLog(logPath, { step: lastStep, targetUrl: CHATGPT_URL });
+    const navigation = await navigateToChatGpt(selectedWindow.handle, CHATGPT_URL, args.stepDelayMs);
+    currentUrl = navigation.currentUrl;
+    await writeJsonlLog(logPath, { step: lastStep, navigation });
+    notes.push(`navigationProof=${navigation.proof}`);
 
     lastStep = 'verify-url-after-navigation';
     const urlCheck = await readCurrentUrl(selectedWindow.handle).catch(() => '');
-    currentUrl = String(urlCheck || '').trim() || CHATGPT_URL;
+    currentUrl = String(urlCheck || '').trim() || currentUrl || CHATGPT_URL;
     const currentUrlLooksValid = isChatGptUrl(currentUrl);
     await writeJsonlLog(logPath, { step: lastStep, currentUrl, currentUrlLooksValid });
     if (!currentUrlLooksValid) {
@@ -161,6 +165,9 @@ export async function submitDesktopChatgpt(argv = []) {
     notes.push(`promptFocusVia=${promptFocus.via}`);
     if (promptFocus.omniboxRejected) {
       notes.push('omniboxRejected=true');
+    }
+    if (promptFocus.readinessProof) {
+      notes.push(`composerReadiness=${promptFocus.readinessProof}`);
     }
     await writeJsonlLog(logPath, { step: lastStep, promptFocus });
 
@@ -245,15 +252,119 @@ async function readCurrentUrl(handle) {
   return String(result.url || '').trim();
 }
 
-async function navigateToChatGpt(targetUrl, stepDelayMs) {
-  await sendKeys('l', ['ctrl']);
-  await delay(stepDelayMs);
-  await sendKeys('a', ['ctrl']);
-  await delay(stepDelayMs);
-  await sendText(targetUrl);
-  await delay(stepDelayMs);
+async function stabilizeWindowFocus(handle, stepDelayMs) {
+  return waitForCondition({
+    step: 'focus-window',
+    attempts: 4,
+    delayMs: stepDelayMs,
+    action: async () => {
+      await focusWindow(handle);
+    },
+    verify: async () => {
+      const foreground = await getForegroundWindow().catch(() => null);
+      const verified = Number(foreground?.window?.handle) === Number(handle);
+      return {
+        ok: verified,
+        proof: verified ? 'foregroundWindowMatchedTarget' : 'foregroundWindowMismatch',
+        foreground: foreground?.window || null
+      };
+    }
+  });
+}
+
+async function waitForWindowRectStability(handle, targetBounds, stepDelayMs) {
+  return waitForCondition({
+    step: 'normalize-window',
+    attempts: 6,
+    delayMs: stepDelayMs,
+    verify: async () => {
+      const sample = await getWindowRect(handle);
+      const window = sample?.window || null;
+      const rect = window?.rect || {};
+      const withinTolerance = isRectClose(rect, targetBounds, 3);
+      return {
+        ok: withinTolerance,
+        proof: withinTolerance ? 'windowRectMatchedTargetBounds' : 'windowRectStillSettling',
+        window
+      };
+    }
+  });
+}
+
+async function navigateToChatGpt(handle, targetUrl, stepDelayMs) {
+  const omnibox = await focusOmniboxAndVerify(handle, stepDelayMs);
+  const urlEntry = await enterAddressAndVerify(handle, targetUrl, stepDelayMs);
+  const ready = await waitForChatGptReady(handle, stepDelayMs, targetUrl);
+  return {
+    ...ready,
+    omnibox,
+    urlEntry,
+    proof: `${omnibox.proof}>${urlEntry.proof}>${ready.proof}`
+  };
+}
+
+async function focusOmniboxAndVerify(handle, stepDelayMs) {
+  return waitForCondition({
+    step: 'focus-omnibox',
+    attempts: 4,
+    delayMs: stepDelayMs,
+    action: async () => {
+      await sendKeys('l', ['ctrl']);
+    },
+    verify: async () => {
+      const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
+      const ok = isLikelyOmniboxElement(focusedElement);
+      return {
+        ok,
+        proof: ok ? 'omniboxFocusedAfterCtrlL' : 'omniboxNotFocusedYet',
+        focusedElement
+      };
+    }
+  });
+}
+
+async function enterAddressAndVerify(handle, targetUrl, stepDelayMs) {
+  return waitForCondition({
+    step: 'enter-address',
+    attempts: 3,
+    delayMs: stepDelayMs,
+    action: async () => {
+      await sendKeys('a', ['ctrl']);
+      await delay(stepDelayMs);
+      await sendText(targetUrl);
+    },
+    verify: async () => {
+      const currentValue = await readCurrentUrl(handle).catch(() => '');
+      const normalized = normalizeAddressValue(currentValue);
+      const ok = normalized === normalizeAddressValue(targetUrl);
+      return {
+        ok,
+        proof: ok ? 'omniboxValueMatchedTargetUrl' : 'omniboxValueMismatch',
+        currentValue
+      };
+    }
+  });
+}
+
+async function waitForChatGptReady(handle, stepDelayMs, targetUrl) {
   await pressEnter();
-  await delay(stepDelayMs * 10);
+  return waitForCondition({
+    step: 'wait-chatgpt-ready',
+    attempts: 10,
+    delayMs: stepDelayMs * 2,
+    verify: async () => {
+      const currentUrl = await readCurrentUrl(handle).catch(() => '');
+      const urlOk = isChatGptUrl(currentUrl) || normalizeAddressValue(currentUrl) === normalizeAddressValue(targetUrl);
+      const composerElement = await queryComposerElement(handle, 1200).catch(() => null);
+      const ready = urlOk && looksLikeComposerElement(composerElement);
+      return {
+        ok: ready,
+        proof: ready ? 'chatgptUrlAndComposerReady' : (urlOk ? 'chatgptUrlReadyComposerPending' : 'chatgptUrlPending'),
+        currentUrl: currentUrl || targetUrl,
+        composerElement
+      };
+    }
+  });
 }
 
 async function dismissInterferingUi(handle, stepDelayMs) {
@@ -285,29 +396,23 @@ async function focusPromptBox(handle, fallbackPoint, stepDelayMs) {
   let omniboxRejected = false;
 
   try {
-    const focused = await uiaSetFocus({ handle }, {
-      automationId: 'prompt-textarea',
-      className: 'ProseMirror',
-      timeoutMs: 2500
+    const ready = await waitForComposerReady(handle, stepDelayMs, {
+      timeoutAttempts: 6,
+      fallbackPoint
     });
-    element = focused.element;
-    await clickComposerCenter(element, fallbackPoint);
-    await delay(stepDelayMs);
-    await uiaSetFocus({ handle }, {
-      automationId: 'prompt-textarea',
-      className: 'ProseMirror',
-      timeoutMs: 1200
-    }).catch(() => null);
+    element = ready.element;
+    via = ready.via;
   } catch {
     via = 'calibrated-fallback';
     await clickPoint(fallbackPoint);
     await delay(stepDelayMs);
-    const retry = await uiaSetFocus({ handle }, {
-      automationId: 'prompt-textarea',
-      className: 'ProseMirror',
-      timeoutMs: 1800
+    const retry = await waitForComposerReady(handle, stepDelayMs, {
+      timeoutAttempts: 4,
+      fallbackPoint,
+      preferFallback: true
     }).catch(() => null);
     element = retry?.element || null;
+    if (retry?.via) via = retry.via;
   }
 
   await delay(stepDelayMs);
@@ -315,7 +420,56 @@ async function focusPromptBox(handle, fallbackPoint, stepDelayMs) {
   if (isLikelyOmniboxElement(focusedElement) || isLikelyOmniboxElement(element)) {
     omniboxRejected = true;
   }
-  return { via, focusedElement, element, omniboxRejected };
+  return {
+    via,
+    focusedElement,
+    element,
+    omniboxRejected,
+    readinessProof: looksLikeComposerElement(focusedElement) || looksLikeComposerElement(element)
+      ? 'composerFocusedAndDetected'
+      : 'composerDetectionDegraded'
+  };
+}
+
+async function waitForComposerReady(handle, stepDelayMs, options = {}) {
+  const attempts = options.timeoutAttempts || 6;
+  const fallbackPoint = options.fallbackPoint;
+  const preferFallback = options.preferFallback === true;
+  return waitForCondition({
+    step: 'focus-prompt',
+    attempts,
+    delayMs: stepDelayMs,
+    action: async () => {
+      if (!preferFallback) {
+        const focused = await uiaSetFocus({ handle }, {
+          automationId: 'prompt-textarea',
+          className: 'ProseMirror',
+          timeoutMs: 1800
+        }).catch(() => null);
+        if (focused?.element) {
+          await clickComposerCenter(focused.element, fallbackPoint);
+          return;
+        }
+      }
+      if (fallbackPoint) {
+        await clickPoint(fallbackPoint);
+      }
+    },
+    verify: async () => {
+      const element = await queryComposerElement(handle, 1200).catch(() => null);
+      const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
+      const focusedLooksValid = looksLikeComposerElement(focusedElement);
+      const elementLooksValid = looksLikeComposerElement(element);
+      const ok = (focusedLooksValid || elementLooksValid) && !isLikelyOmniboxElement(focusedElement);
+      return {
+        ok,
+        proof: ok ? 'composerFocusedAndDetected' : 'composerNotReadyYet',
+        element,
+        focusedElement,
+        via: focusedLooksValid || elementLooksValid ? (preferFallback ? 'calibrated-fallback' : 'uia-focus-prompt-textarea') : null
+      };
+    }
+  });
 }
 
 async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
@@ -325,18 +479,16 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
     await refocusComposer(handle, promptFocus, stepDelayMs);
     await clearComposer(stepDelayMs);
     await sendText(prompt);
-    await delay(stepDelayMs * 2);
-
-    let proof = await readComposerProof(handle);
-    if (proof.text.includes(prompt)) {
+    const directProof = await waitForPromptPresence(handle, prompt, stepDelayMs, 'uia-focus+unicode-sendkeys');
+    if (directProof.ok) {
       return {
         method: 'uia-focus+unicode-sendkeys+uia-text-read',
         expectedHash,
-        actualHash: hashText(proof.text),
-        focusedElement: proof.focusedElement,
-        composerElement: proof.element,
+        actualHash: hashText(directProof.text),
+        focusedElement: directProof.focusedElement,
+        composerElement: directProof.element,
         proof: 'composerTextContainsPrompt',
-        composerTextSample: proof.text.slice(0, 200)
+        composerTextSample: directProof.text.slice(0, 200)
       };
     }
 
@@ -344,17 +496,16 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
     await setClipboardText(prompt);
     await delay(stepDelayMs);
     await pasteClipboard();
-    await delay(stepDelayMs * 2);
-    proof = await readComposerProof(handle);
-    if (proof.text.includes(prompt)) {
+    const clipboardProof = await waitForPromptPresence(handle, prompt, stepDelayMs, 'uia-focus+clipboard-paste');
+    if (clipboardProof.ok) {
       return {
         method: 'uia-focus+clipboard-paste+uia-text-read',
         expectedHash,
-        actualHash: hashText(proof.text),
-        focusedElement: proof.focusedElement,
-        composerElement: proof.element,
+        actualHash: hashText(clipboardProof.text),
+        focusedElement: clipboardProof.focusedElement,
+        composerElement: clipboardProof.element,
         proof: 'composerTextContainsPrompt',
-        composerTextSample: proof.text.slice(0, 200)
+        composerTextSample: clipboardProof.text.slice(0, 200)
       };
     }
   } catch {
@@ -371,6 +522,25 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
     proof: coordinateProof.proof,
     composerTextSample: coordinateProof.composerTextSample
   };
+}
+
+async function waitForPromptPresence(handle, prompt, stepDelayMs, method) {
+  const result = await waitForCondition({
+    step: 'insert-prompt',
+    attempts: 5,
+    delayMs: stepDelayMs,
+    verify: async () => {
+      const proof = await readComposerProof(handle);
+      const ok = proof.text.includes(prompt);
+      return {
+        ok,
+        proof: ok ? `${method}+composerTextContainsPrompt` : `${method}+composerTextPending`,
+        ...proof
+      };
+    },
+    throwOnFailure: false
+  });
+  return result;
 }
 
 async function validatePromptInput(handle, prompt, promptFocus, insertion, stepDelayMs) {
@@ -390,61 +560,77 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
   }
 
   await refocusComposer(handle, promptFocus, stepDelayMs);
-  const proof = await readComposerProof(handle);
-  const focusedElement = proof.focusedElement;
-
-  ensurePromptTargetLooksCredible({
-    promptFocus,
-    focusedElement,
-    currentUrlAfterValidation: CHATGPT_URL,
-    prompt,
-    actualHash: hashText(proof.text)
+  const verifiedProof = await waitForCondition({
+    step: 'validate-prompt',
+    attempts: 5,
+    delayMs: stepDelayMs,
+    verify: async () => {
+      const proof = await readComposerProof(handle);
+      ensurePromptTargetLooksCredible({
+        promptFocus,
+        focusedElement: proof.focusedElement,
+        currentUrlAfterValidation: CHATGPT_URL,
+        prompt,
+        actualHash: hashText(proof.text)
+      });
+      const ok = proof.text.includes(prompt);
+      return {
+        ok,
+        proof: ok ? 'composerTextContainsPrompt' : 'composerTextStillHydrating',
+        ...proof
+      };
+    },
+    failureCode: 'PROMPT_VALIDATION_FAILED',
+    failureMessage: 'ChatGPT composer text proof did not contain the prepared prompt.'
   });
-
-  if (!proof.text.includes(prompt)) {
-    throw new StepError('PROMPT_VALIDATION_FAILED', 'validate-prompt', 'ChatGPT composer text proof did not contain the prepared prompt.', {
-      expectedHash,
-      actualHash: hashText(proof.text),
-      composerTextSample: proof.text.slice(0, 200),
-      focusedElement,
-      composerElement: proof.element,
-      insertionMethod: insertion?.method
-    });
-  }
 
   return {
     method: `${insertion?.method || 'unknown'}+uia-text-proof`,
     expectedHash,
-    actualHash: hashText(proof.text),
+    actualHash: hashText(verifiedProof.text),
     clipboardHash: expectedHash,
-    focusedElement,
-    composerElement: proof.element,
-    proof: 'composerTextContainsPrompt',
-    composerTextSample: proof.text.slice(0, 200)
+    focusedElement: verifiedProof.focusedElement,
+    composerElement: verifiedProof.element,
+    proof: verifiedProof.proof,
+    composerTextSample: verifiedProof.text.slice(0, 200)
   };
 }
 
 async function refocusComposer(handle, promptFocus, stepDelayMs) {
-  await uiaSetFocus({ handle }, {
-    automationId: 'prompt-textarea',
-    className: 'ProseMirror',
-    timeoutMs: 1800
-  }).catch(() => null);
-  await delay(stepDelayMs);
-  const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
-  if (isLikelyOmniboxElement(focusedElement)) {
-    throw new StepError('PROMPT_TARGET_INVALID', 'refocus-composer', 'Focused element relapsed into the browser omnibox.', {
-      promptFocus: promptFocus?.element || null,
-      focusedElement
-    });
-  }
-  if (!looksLikeComposerElement(focusedElement)) {
-    throw new StepError('PROMPT_TARGET_INVALID', 'refocus-composer', 'Focused element is not the ChatGPT composer after UIA refocus.', {
-      promptFocus: promptFocus?.element || null,
-      focusedElement
-    });
-  }
-  return focusedElement;
+  const result = await waitForCondition({
+    step: 'refocus-composer',
+    attempts: 4,
+    delayMs: stepDelayMs,
+    action: async () => {
+      await uiaSetFocus({ handle }, {
+        automationId: 'prompt-textarea',
+        className: 'ProseMirror',
+        timeoutMs: 1800
+      }).catch(() => null);
+    },
+    verify: async () => {
+      const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
+      if (isLikelyOmniboxElement(focusedElement)) {
+        return {
+          ok: false,
+          proof: 'focusedElementRelapsedIntoOmnibox',
+          focusedElement
+        };
+      }
+      const ok = looksLikeComposerElement(focusedElement);
+      return {
+        ok,
+        proof: ok ? 'composerRefocused' : 'composerRefocusPending',
+        focusedElement
+      };
+    },
+    failureCode: 'PROMPT_TARGET_INVALID',
+    failureMessage: 'Focused element is not the ChatGPT composer after UIA refocus.',
+    failureDetails: {
+      promptFocus: promptFocus?.element || null
+    }
+  });
+  return result.focusedElement;
 }
 
 async function clearComposer(stepDelayMs) {
@@ -476,7 +662,7 @@ async function readComposerProof(handle) {
 }
 
 async function insertPromptViaCoordinateProof(prompt, stepDelayMs) {
-  await delay(stepDelayMs * 6);
+  await delay(stepDelayMs * 2);
   await clickPoint({ x: 806, y: 530 });
   await delay(stepDelayMs * 2);
   await sendKeys('a', ['ctrl']);
@@ -559,20 +745,20 @@ async function submitPrompt(handle, submitPoint, stepDelayMs, prompt) {
   let method = 'enter';
   try {
     await pressEnter();
-    await delay(stepDelayMs * 3);
+    await delay(stepDelayMs * 2);
   } catch {
     try {
       await uiaInvoke({ handle }, { automationId: 'composer-submit-btn', timeoutMs: 1000 });
-      await delay(stepDelayMs * 3);
+      await delay(stepDelayMs * 2);
       method = 'uia-invoke-submit-button';
     } catch {
       try {
         await uiaInvoke({ handle }, { name: 'Send', role: 'Button', timeoutMs: 1000 });
-        await delay(stepDelayMs * 3);
+        await delay(stepDelayMs * 2);
         method = 'uia-invoke-send-button';
       } catch {
         await clickPoint(submitPoint);
-        await delay(stepDelayMs * 3);
+        await delay(stepDelayMs * 2);
         method = 'calibrated-send-button';
       }
     }
@@ -610,20 +796,24 @@ async function collectSubmitEvidence(handle, prompt) {
 }
 
 async function waitForSubmitEvidence(handle, prompt, before, stepDelayMs) {
-  const deadline = Date.now() + Math.max(4000, stepDelayMs * 20);
-  let last = before;
-  do {
-    await delay(stepDelayMs * 2);
-    const sample = await collectSubmitEvidence(handle, prompt).catch(() => null);
-    if (!sample) continue;
-    last = sample;
-    const proof = deriveSubmitProof(before, sample, prompt);
-    if (proof !== 'submitUnprovenComposerStillContainsPrompt') {
-      return { ...sample, proof };
-    }
-  } while (Date.now() < deadline);
-
-  return { ...last, proof: deriveSubmitProof(before, last, prompt) };
+  return waitForCondition({
+    step: 'submit-prompt',
+    attempts: 12,
+    delayMs: stepDelayMs * 2,
+    verify: async () => {
+      const sample = await collectSubmitEvidence(handle, prompt).catch(() => null);
+      if (!sample) {
+        return { ok: false, proof: 'submitEvidenceUnavailable' };
+      }
+      const proof = deriveSubmitProof(before, sample, prompt);
+      return {
+        ok: proof !== 'submitUnprovenComposerStillContainsPrompt',
+        proof,
+        ...sample
+      };
+    },
+    throwOnFailure: false
+  });
 }
 
 function deriveSubmitProof(before, after, prompt) {
@@ -697,6 +887,76 @@ function isLikelyOmniboxElement(element) {
   return OMNIBOX_HINTS.some((hint) => haystack.includes(hint.toLowerCase()));
 }
 
+async function queryComposerElement(handle, timeoutMs = 1200) {
+  const result = await uiaQuery({ handle }, {
+    automationId: 'prompt-textarea',
+    className: 'ProseMirror',
+    timeoutMs
+  });
+  return result?.element || null;
+}
+
+function normalizeAddressValue(value) {
+  return String(value || '').trim().replace(/\/+$/, '/').toLowerCase();
+}
+
+function isRectClose(actual = {}, expected = {}, tolerance = 3) {
+  return ['x', 'y', 'width', 'height'].every((key) => Math.abs(Number(actual?.[key] || 0) - Number(expected?.[key] || 0)) <= tolerance);
+}
+
+async function waitForCondition({
+  step,
+  attempts = 3,
+  delayMs = 250,
+  action = null,
+  verify,
+  throwOnFailure = true,
+  failureCode = ERROR_CODES.SUBMIT_FAILED,
+  failureMessage = `${step} did not reach the expected ready state.`,
+  failureDetails = {}
+}) {
+  let lastResult = null;
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      if (action) {
+        await action(attempt);
+      }
+      await delay(delayMs);
+      lastResult = await verify(attempt);
+      if (lastResult?.ok) {
+        return { ...lastResult, attemptsUsed: attempt };
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < attempts) {
+      await delay(delayMs);
+    }
+  }
+
+  if (!throwOnFailure) {
+    return {
+      ok: false,
+      attemptsUsed: attempts,
+      proof: lastResult?.proof || 'conditionUnverified',
+      ...lastResult,
+      error: lastError ? { message: lastError.message, code: lastError.code } : null
+    };
+  }
+
+  if (lastError instanceof StepError) {
+    throw lastError;
+  }
+
+  throw new StepError(failureCode, step, failureMessage, {
+    attempts,
+    lastResult,
+    lastError: lastError ? { message: lastError.message, code: lastError.code, step: lastError.step } : null,
+    ...failureDetails
+  });
+}
+
 function hashText(value) {
   return crypto.createHash('sha256').update(String(value), 'utf8').digest('hex');
 }
@@ -709,5 +969,7 @@ export const __desktopSubmitInternals = {
   looksLikePromptEcho,
   deriveSubmitProof,
   looksLikeStopButton,
-  hashText
+  hashText,
+  normalizeAddressValue,
+  isRectClose
 };

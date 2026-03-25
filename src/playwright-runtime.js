@@ -78,9 +78,10 @@ export async function createPlaywrightAutomationSession({ profile, args, screens
     },
 
     async ensureLoggedInOrWait(timeoutMs = LOGIN_WAIT_TIMEOUT_MS) {
-      if (await isLoggedIn(state.page)) {
-        notes.push('loginState=ready');
-        await markStep('ensure-login', { loginState: 'ready' });
+      const readiness = await detectPromptReadiness(state.page);
+      if (readiness.ready) {
+        notes.push(`loginState=${readiness.mode}`);
+        await markStep('ensure-login', { loginState: readiness.mode });
         return;
       }
       notes.push('loginState=manual-required');
@@ -91,14 +92,15 @@ export async function createPlaywrightAutomationSession({ profile, args, screens
       try {
         await state.page.bringToFront().catch(() => {});
         await state.page.waitForFunction(() => {
-          const text = document.body?.innerText || '';
-          const hasPrompt = !!document.querySelector('textarea, div[contenteditable="true"], [role="textbox"]');
-          const loginWords = ['Log in', '로그인', 'Sign up', '회원가입'];
-          const looksLoggedOut = loginWords.some((word) => text.includes(word));
-          return hasPrompt && !looksLoggedOut;
+          const prompt = document.querySelector('textarea, div[contenteditable="true"], [role="textbox"]');
+          if (!prompt) return false;
+          const style = window.getComputedStyle(prompt);
+          const visible = style && style.visibility !== 'hidden' && style.display !== 'none';
+          return visible;
         }, { timeout: timeoutMs });
-        notes.push('loginState=completed');
-        await markStep('ensure-login', { loginState: 'completed', timeoutMs });
+        const completed = await detectPromptReadiness(state.page);
+        notes.push(`loginState=${completed.mode}`);
+        await markStep('ensure-login', { loginState: completed.mode, timeoutMs });
       } catch {
         await this.captureScreenshot();
         throw new StepError(ERROR_CODES.LOGIN_REQUIRED, 'ensure-login', 'Manual login was not completed within the wait window.', { lastSuccessfulStep: state.lastSuccessfulStep, timeoutMs });
@@ -261,15 +263,25 @@ async function isFirstRunProfile(dir) {
   }
 }
 
-async function isLoggedIn(page) {
+async function detectPromptReadiness(page) {
   const promptBox = page.locator('textarea, div[contenteditable="true"], [role="textbox"]').first();
-  if (await promptBox.count()) {
-    const visible = await promptBox.isVisible().catch(() => false);
-    if (visible) return true;
+  if (!await promptBox.count()) {
+    return { ready: false, mode: 'manual-required' };
   }
+
+  const visible = await promptBox.isVisible().catch(() => false);
+  if (!visible) {
+    return { ready: false, mode: 'manual-required' };
+  }
+
   const bodyText = await page.locator('body').innerText().catch(() => '');
   const loggedOutWords = ['Log in', '로그인', 'Sign up', '회원가입'];
-  return !loggedOutWords.some((word) => bodyText.includes(word)) && (bodyText.includes('ChatGPT') || bodyText.includes('무엇을 도와드릴까요?'));
+  const looksLoggedOut = loggedOutWords.some((word) => bodyText.includes(word));
+  return { ready: true, mode: looksLoggedOut ? 'guest-ready' : 'ready' };
+}
+
+async function isLoggedIn(page) {
+  return (await detectPromptReadiness(page)).ready;
 }
 
 async function findProjectListCandidate(page, target, projectName, recordSelectorHit) {
@@ -375,3 +387,7 @@ function renderCandidate(candidate) {
   }
   return `${candidate.kind}:${String(candidate.value)}`;
 }
+
+export const __playwrightRuntimeInternals = {
+  detectPromptReadiness
+};

@@ -1,7 +1,7 @@
 {
   "name": "chatgpt-prompt-dispatcher",
   "version": "0.1.0",
-  "description": "Local browser automation for dispatching prompts into a logged-in ChatGPT web session on Windows.",
+  "description": "Local Windows prompt dispatch for ChatGPT via visible browser automation and desktop-input calibration.",
   "type": "module",
   "main": "src/index.js",
   "bin": {
@@ -17,6 +17,7 @@
     "install-local": "node src/install-local.js",
     "register-openclaw": "node src/register-openclaw.js",
     "submit": "node src/index.js submit-chatgpt",
+    "submit-desktop": "node src/index.js submit-desktop-chatgpt",
     "warmup": "node src/index.js warmup-chatgpt"
   },
   "keywords": [

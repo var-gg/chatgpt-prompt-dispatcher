@@ -3,6 +3,7 @@ import { validateConfig } from './config-schema.js';
 import { submitChatgpt } from './submit-chatgpt.js';
 import { warmupChatgpt } from './warmup-chatgpt.js';
 import { runSmoke } from './smoke.js';
+import { submitDesktopChatgpt } from './desktop/submit-desktop-chatgpt.js';
 
 /**
  * CLI entrypoint scaffold.
@@ -40,6 +41,12 @@ export async function runCli(argv = []) {
     return;
   }
 
+  if (command === 'submit-desktop-chatgpt') {
+    const receipt = await submitDesktopChatgpt(argv.slice(1));
+    console.log(JSON.stringify(receipt, null, 2));
+    return;
+  }
+
   throw new Error(`Unknown command: ${command}`);
 }
 
@@ -51,10 +58,12 @@ function printHelp() {
     '  help                     Show help',
     '  profile:show <name>      Load and print a sample profile',
     '  smoke                    Run placeholder smoke check',
-    '  submit-chatgpt [opts]    Submit a prompt through visible browser automation',
-    '  warmup-chatgpt [opts]    Open ChatGPT and hold the browser for manual login/captcha',
+    '  submit-chatgpt [opts]           Submit a prompt through visible browser automation',
+    '  warmup-chatgpt [opts]           Open ChatGPT and hold the browser for manual login/captcha',
+    '  submit-desktop-chatgpt [opts]   Submit a prompt through Windows desktop input using calibration',
     '',
-    'TODO:',
-    '  Add visible browser automation dispatch commands.',
+    'Desktop mode notes:',
+    '  - Uses a ChatGPT-specific calibration profile under profiles/desktop/',
+    '  - Focuses/resizes a visible Chrome window and pastes the prompt locally',
   ].join('\n'));
 }

@@ -1,10 +1,15 @@
 # Unofficial local input automation for ChatGPT web
 
-`chatgpt-prompt-dispatcher` is an unofficial, local-only tool for submitting prepared prompts into a locally logged-in ChatGPT web session through visible browser automation.
+`chatgpt-prompt-dispatcher` is an unofficial, local-only tool for submitting prepared prompts into a locally logged-in ChatGPT web session on Windows.
+
+The repo now has **two paths**:
+- existing Playwright-based visible browser automation
+- new first-pass **desktop-input ChatGPT dispatcher** based on a calibrated Chrome window
 
 ## Purpose
 
 - Open ChatGPT Web in a local logged-in browser session.
+- Support a desktop-input path that targets a visible calibrated ChatGPT window.
 - Optionally enter a specified ChatGPT Project first.
 - Optionally start a new chat.
 - Optionally attach files through the visible tools/attachment menu.
@@ -76,6 +81,24 @@ A fresh automation profile must be logged in manually once.
 5. Re-run the command if the first attempt timed out at `LOGIN_REQUIRED`.
 
 The tool waits for manual login, but it does not automate login.
+
+## Desktop Mode (first pass)
+
+New command:
+
+```bash
+npm run submit-desktop -- --prompt "안녕하세요" --calibration-profile default --dry-run
+npm run submit-desktop -- --prompt-file .\prompt.txt --calibration-profile default --window-title "ChatGPT" --submit-method click
+```
+
+Desktop mode currently:
+- focuses a visible window by title hint
+- resizes it toward a standardized rectangle from the calibration profile
+- clicks the calibrated prompt box point
+- pastes via clipboard
+- optionally submits by click or Enter
+
+See `docs/desktop-dispatcher-plan.md` for the intended evolution and calibration strategy.
 
 ## Supported Scenarios
 

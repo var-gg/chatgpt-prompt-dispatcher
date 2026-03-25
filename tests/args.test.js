@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { parseSubmitArgs } from '../src/args.js';
+import { parseDesktopSubmitArgs, parseSubmitArgs } from '../src/args.js';
 
 test('parseSubmitArgs accepts prompt and attachments', async () => {
   const result = await parseSubmitArgs([
@@ -25,4 +25,22 @@ test('parseSubmitArgs loads prompt file', async () => {
   const result = await parseSubmitArgs(['--prompt-file', tmp]);
   assert.equal(result.prompt, 'file prompt');
   assert.equal(result.promptFile, path.resolve(tmp));
+});
+
+test('parseDesktopSubmitArgs accepts desktop-specific flags', async () => {
+  const result = await parseDesktopSubmitArgs([
+    '--prompt', 'desktop hello',
+    '--calibration-profile', 'default',
+    '--window-title', 'ChatGPT',
+    '--step-delay-ms', '250',
+    '--submit-method', 'enter',
+    '--no-submit'
+  ]);
+
+  assert.equal(result.prompt, 'desktop hello');
+  assert.equal(result.calibrationProfile, 'default');
+  assert.equal(result.windowTitle, 'ChatGPT');
+  assert.equal(result.stepDelayMs, 250);
+  assert.equal(result.submitMethod, 'enter');
+  assert.equal(result.submit, false);
 });

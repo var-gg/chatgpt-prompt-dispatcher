@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "profileName": "default",
+  "app": "chatgpt-desktop-dispatcher",
+  "window": {
+    "titleHint": "ChatGPT",
+    "targetBounds": {
+      "x": 100,
+      "y": 80,
+      "width": 1440,
+      "height": 900
+    }
+  },
+  "anchors": {
+    "promptInput": { "x": 0.5, "y": 0.92 },
+    "submitButton": { "x": 0.965, "y": 0.92 },
+    "newChatButton": { "x": 0.085, "y": 0.14 }
+  },
+  "notes": [
+    "Bootstrap calibration profile for standardized Chrome window.",
+    "Adjust normalized anchors per actual ChatGPT UI tier if needed."
+  ]
+}

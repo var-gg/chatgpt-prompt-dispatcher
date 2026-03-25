@@ -18,6 +18,10 @@ function parseCommonArgs(argv = [], options = {}) {
     profile: 'default',
     mode: 'auto',
     holdOpenMs: 0,
+    calibrationProfile: 'default',
+    stepDelayMs: 150,
+    submit: true,
+    submitMethod: 'click',
     ...options
   };
 
@@ -69,6 +73,29 @@ function parseCommonArgs(argv = [], options = {}) {
         parsed.holdOpenMs = Number(consumeValue(argv, i, token));
         i += 1;
         break;
+      case '--calibration-profile':
+        parsed.calibrationProfile = consumeValue(argv, i, token);
+        i += 1;
+        break;
+      case '--calibration-dir':
+        parsed.calibrationDir = consumeValue(argv, i, token);
+        i += 1;
+        break;
+      case '--window-title':
+        parsed.windowTitle = consumeValue(argv, i, token);
+        i += 1;
+        break;
+      case '--step-delay-ms':
+        parsed.stepDelayMs = Number(consumeValue(argv, i, token));
+        i += 1;
+        break;
+      case '--submit-method':
+        parsed.submitMethod = consumeValue(argv, i, token);
+        i += 1;
+        break;
+      case '--no-submit':
+        parsed.submit = false;
+        break;
       default:
         throw new StepError(ERROR_CODES.INVALID_ARGS, 'parse-args', `Unknown argument: ${token}`);
     }
@@ -76,6 +103,9 @@ function parseCommonArgs(argv = [], options = {}) {
 
   if (!Number.isFinite(parsed.holdOpenMs) || parsed.holdOpenMs < 0) {
     throw new StepError(ERROR_CODES.INVALID_ARGS, 'parse-args', '--hold-open-ms must be a non-negative number.');
+  }
+  if (!Number.isFinite(parsed.stepDelayMs) || parsed.stepDelayMs < 0) {
+    throw new StepError(ERROR_CODES.INVALID_ARGS, 'parse-args', '--step-delay-ms must be a non-negative number.');
   }
 
   return parsed;
@@ -107,5 +137,13 @@ export async function parseSubmitArgs(argv = []) {
 
 export async function parseWarmupArgs(argv = []) {
   const options = parseCommonArgs(argv, { holdOpenMs: 30 * 60 * 1000 });
+  return options;
+}
+
+export async function parseDesktopSubmitArgs(argv = []) {
+  const options = await parseSubmitArgs(argv);
+  if (!['click', 'enter'].includes(options.submitMethod)) {
+    throw new StepError(ERROR_CODES.INVALID_ARGS, 'parse-args', '--submit-method must be either click or enter.');
+  }
   return options;
 }

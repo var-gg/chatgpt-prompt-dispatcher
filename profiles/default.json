@@ -6,12 +6,79 @@
     "locale": "ko-KR"
   },
   "chatgpt": {
-    "mode": "new-chat",
+    "mode": "auto",
     "projectName": null,
-    "uiTier": "pro-first-plus-fallback"
+    "uiTier": "pro"
   },
   "attachments": {
     "enabled": true,
     "strategy": "visible-menu-only"
+  },
+  "ui": {
+    "project": {
+      "entry": {
+        "labels": ["프로젝트", "Projects"],
+        "texts": ["프로젝트", "Projects"],
+        "selectors": ["button[aria-label*='프로젝트']", "button:has-text('프로젝트')"]
+      },
+      "search": {
+        "labels": ["프로젝트 검색", "Search projects"],
+        "texts": ["프로젝트 검색", "Search projects"],
+        "selectors": ["input[aria-label*='프로젝트']", "input[placeholder*='Search']"]
+      },
+      "list": {
+        "selectors": ["[role='menu'] [role='menuitem']", "[role='listbox'] [role='option']"]
+      }
+    },
+    "newChat": {
+      "labels": ["새 채팅", "New chat"],
+      "texts": ["새 채팅", "New chat"],
+      "selectors": ["a[aria-label*='새 채팅']", "button:has-text('New chat')"]
+    },
+    "promptBox": {
+      "labels": ["무엇을 도와드릴까요?", "Message ChatGPT"],
+      "texts": ["무엇을 도와드릴까요?", "Message ChatGPT"],
+      "selectors": ["textarea", "div[contenteditable='true']"]
+    },
+    "submit": {
+      "labels": ["보내기", "Send prompt"],
+      "texts": ["보내기", "Send"],
+      "selectors": ["button[aria-label*='보내기']", "button[data-testid='send-button']"]
+    },
+    "modeMenu": {
+      "entry": {
+        "labels": ["모델 선택", "Model"],
+        "texts": ["최신", "Instant", "Thinking", "Pro", "구성..."],
+        "selectors": ["button[aria-haspopup='menu']"]
+      },
+      "options": {
+        "auto": { "labels": ["최신"], "texts": ["최신"], "selectors": ["[role='menuitem']:has-text('최신')"] },
+        "latest": { "labels": ["최신"], "texts": ["최신"], "selectors": ["[role='menuitem']:has-text('최신')"] },
+        "instant": { "labels": ["Instant"], "texts": ["Instant"], "selectors": ["[role='menuitem']:has-text('Instant')"] },
+        "thinking": { "labels": ["Thinking"], "texts": ["Thinking"], "selectors": ["[role='menuitem']:has-text('Thinking')"] },
+        "pro": { "labels": ["Pro"], "texts": ["Pro"], "selectors": ["[role='menuitem']:has-text('Pro')"] }
+      },
+      "overflow": {
+        "labels": ["구성..."],
+        "texts": ["구성..."],
+        "selectors": ["[role='menuitem']:has-text('구성...')"]
+      }
+    },
+    "toolsMenu": {
+      "entry": {
+        "labels": ["도구", "Tools", "첨부"],
+        "texts": ["도구", "Tools", "+"],
+        "selectors": ["button[aria-label*='도구']", "button:has-text('+')"]
+      },
+      "items": {
+        "upload": { "labels": ["사진 및 파일 업로드"], "texts": ["사진 및 파일 업로드"], "selectors": ["[role='menuitem']:has-text('사진 및 파일 업로드')"] },
+        "recent": { "labels": ["최근 파일"], "texts": ["최근 파일"], "selectors": ["[role='menuitem']:has-text('최근 파일')"] },
+        "deepResearch": { "labels": ["심층 리서치"], "texts": ["심층 리서치"], "selectors": ["[role='menuitem']:has-text('심층 리서치')"] },
+        "shoppingAssistant": { "labels": ["쇼핑 어시스턴트"], "texts": ["쇼핑 어시스턴트"], "selectors": ["[role='menuitem']:has-text('쇼핑 어시스턴트')"] },
+        "webSearch": { "labels": ["웹 검색"], "texts": ["웹 검색"], "selectors": ["[role='menuitem']:has-text('웹 검색')"] },
+        "study": { "labels": ["공부하기"], "texts": ["공부하기"], "selectors": ["[role='menuitem']:has-text('공부하기')"] },
+        "more": { "labels": ["더 보기"], "texts": ["더 보기"], "selectors": ["[role='menuitem']:has-text('더 보기')"] }
+      }
+    }
   }
 }

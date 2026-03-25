@@ -1,0 +1,909 @@
+DRY-RUN
+{
+  "profileName": "ko-KR.windows.pro",
+  "locale": "ko-KR",
+  "tier": "pro",
+  "loginCheck": {
+    "strategy": "visible-ui-only-wait",
+    "notes": [
+      "If not logged in, wait for manual login and do not automate authentication."
+    ]
+  },
+  "navigation": {
+    "url": "https://chatgpt.com/"
+  },
+  "project": {
+    "action": "select-project",
+    "value": "Alpha",
+    "entryCandidates": [
+      {
+        "kind": "label",
+        "value": "프로젝트",
+        "priority": 1
+      },
+      {
+        "kind": "label",
+        "value": "Projects",
+        "priority": 2
+      },
+      {
+        "kind": "text",
+        "value": "프로젝트",
+        "priority": 1
+      },
+      {
+        "kind": "text",
+        "value": "Projects",
+        "priority": 2
+      },
+      {
+        "kind": "selector",
+        "value": "button[aria-label*='프로젝트']",
+        "priority": 1
+      },
+      {
+        "kind": "selector",
+        "value": "button:has-text('프로젝트')",
+        "priority": 2
+      },
+      {
+        "kind": "selector",
+        "value": "button:has-text('Projects')",
+        "priority": 3
+      }
+    ],
+    "searchCandidates": [
+      {
+        "kind": "label",
+        "value": "프로젝트 검색",
+        "priority": 1
+      },
+      {
+        "kind": "label",
+        "value": "Search projects",
+        "priority": 2
+      },
+      {
+        "kind": "text",
+        "value": "프로젝트 검색",
+        "priority": 1
+      },
+      {
+        "kind": "text",
+        "value": "Search projects",
+        "priority": 2
+      },
+      {
+        "kind": "selector",
+        "value": "input[aria-label*='프로젝트']",
+        "priority": 1
+      },
+      {
+        "kind": "selector",
+        "value": "input[placeholder*='프로젝트']",
+        "priority": 2
+      },
+      {
+        "kind": "selector",
+        "value": "input[placeholder*='Search']",
+        "priority": 3
+      }
+    ],
+    "listSelectors": [
+      {
+        "kind": "selector",
+        "value": "[role='menu'] [role='menuitem']",
+        "priority": 1
+      },
+      {
+        "kind": "selector",
+        "value": "[role='listbox'] [role='option']",
+        "priority": 2
+      },
+      {
+        "kind": "selector",
+        "value": "a[href*='/g/']",
+        "priority": 3
+      }
+    ]
+  },
+  "newChat": {
+    "action": "skip-new-chat-after-project"
+  },
+  "mode": {
+    "action": "select-mode",
+    "value": "thinking",
+    "candidates": {
+      "entry": [
+        {
+          "kind": "label",
+          "value": "모델 선택",
+          "priority": 1
+        },
+        {
+          "kind": "label",
+          "value": "모델",
+          "priority": 2
+        },
+        {
+          "kind": "label",
+          "value": "Model",
+          "priority": 3
+        },
+        {
+          "kind": "text",
+          "value": "최신",
+          "priority": 1
+        },
+        {
+          "kind": "text",
+          "value": "Instant",
+          "priority": 2
+        },
+        {
+          "kind": "text",
+          "value": "Thinking",
+          "priority": 3
+        },
+        {
+          "kind": "text",
+          "value": "Pro",
+          "priority": 4
+        },
+        {
+          "kind": "text",
+          "value": "구성...",
+          "priority": 5
+        },
+        {
+          "kind": "selector",
+          "value": "button[aria-haspopup='menu']",
+          "priority": 1
+        },
+        {
+          "kind": "selector",
+          "value": "button:has-text('최신')",
+          "priority": 2
+        },
+        {
+          "kind": "selector",
+          "value": "button:has-text('Instant')",
+          "priority": 3
+        },
+        {
+          "kind": "selector",
+          "value": "button:has-text('Thinking')",
+          "priority": 4
+        },
+        {
+          "kind": "selector",
+          "value": "button:has-text('Pro')",
+          "priority": 5
+        }
+      ],
+      "option": [
+        {
+          "kind": "label",
+          "value": "Thinking",
+          "priority": 1
+        },
+        {
+          "kind": "text",
+          "value": "Thinking",
+          "priority": 1
+        },
+        {
+          "kind": "selector",
+          "value": "[role='menuitem']:has-text('Thinking')",
+          "priority": 1
+        },
+        {
+          "kind": "selector",
+          "value": "[role='option']:has-text('Thinking')",
+          "priority": 2
+        }
+      ],
+      "overflow": [
+        {
+          "kind": "label",
+          "value": "구성...",
+          "priority": 1
+        },
+        {
+          "kind": "label",
+          "value": "More models",
+          "priority": 2
+        },
+        {
+          "kind": "text",
+          "value": "구성...",
+          "priority": 1
+        },
+        {
+          "kind": "text",
+          "value": "More models",
+          "priority": 2
+        },
+        {
+          "kind": "selector",
+          "value": "[role='menuitem']:has-text('구성...')",
+          "priority": 1
+        },
+        {
+          "kind": "selector",
+          "value": "[role='menuitem']:has-text('More models')",
+          "priority": 2
+        }
+      ]
+    }
+  },
+  "attachments": {
+    "enabled": true,
+    "files": [
+      ".\\README.md"
+    ],
+    "menu": {
+      "entry": [
+        {
+          "kind": "label",
+          "value": "도구",
+          "priority": 1
+        },
+        {
+          "kind": "label",
+          "value": "Tools",
+          "priority": 2
+        },
+        {
+          "kind": "label",
+          "value": "첨부",
+          "priority": 3
+        },
+        {
+          "kind": "text",
+          "value": "도구",
+          "priority": 1
+        },
+        {
+          "kind": "text",
+          "value": "Tools",
+          "priority": 2
+        },
+        {
+          "kind": "text",
+          "value": "+",
+          "priority": 3
+        },
+        {
+          "kind": "selector",
+          "value": "button[aria-label*='도구']",
+          "priority": 1
+        },
+        {
+          "kind": "selector",
+          "value": "button[aria-label*='Tools']",
+          "priority": 2
+        },
+        {
+          "kind": "selector",
+          "value": "button:has-text('+')",
+          "priority": 3
+        }
+      ],
+      "item": [
+        {
+          "kind": "label",
+          "value": "사진 및 파일 업로드",
+          "priority": 1
+        },
+        {
+          "kind": "label",
+          "value": "Upload photos and files",
+          "priority": 2
+        },
+        {
+          "kind": "text",
+          "value": "사진 및 파일 업로드",
+          "priority": 1
+        },
+        {
+          "kind": "text",
+          "value": "Upload photos and files",
+          "priority": 2
+        },
+        {
+          "kind": "selector",
+          "value": "[role='menuitem']:has-text('사진 및 파일 업로드')",
+          "priority": 1
+        },
+        {
+          "kind": "selector",
+          "value": "[role='menuitem']:has-text('Upload photos and files')",
+          "priority": 2
+        }
+      ]
+    },
+    "auxiliary": {
+      "recent": {
+        "entry": [
+          {
+            "kind": "label",
+            "value": "도구",
+            "priority": 1
+          },
+          {
+            "kind": "label",
+            "value": "Tools",
+            "priority": 2
+          },
+          {
+            "kind": "label",
+            "value": "첨부",
+            "priority": 3
+          },
+          {
+            "kind": "text",
+            "value": "도구",
+            "priority": 1
+          },
+          {
+            "kind": "text",
+            "value": "Tools",
+            "priority": 2
+          },
+          {
+            "kind": "text",
+            "value": "+",
+            "priority": 3
+          },
+          {
+            "kind": "selector",
+            "value": "button[aria-label*='도구']",
+            "priority": 1
+          },
+          {
+            "kind": "selector",
+            "value": "button[aria-label*='Tools']",
+            "priority": 2
+          },
+          {
+            "kind": "selector",
+            "value": "button:has-text('+')",
+            "priority": 3
+          }
+        ],
+        "item": [
+          {
+            "kind": "label",
+            "value": "최근 파일",
+            "priority": 1
+          },
+          {
+            "kind": "label",
+            "value": "Recent files",
+            "priority": 2
+          },
+          {
+            "kind": "text",
+            "value": "최근 파일",
+            "priority": 1
+          },
+          {
+            "kind": "text",
+            "value": "Recent files",
+            "priority": 2
+          },
+          {
+            "kind": "selector",
+            "value": "[role='menuitem']:has-text('최근 파일')",
+            "priority": 1
+          },
+          {
+            "kind": "selector",
+            "value": "[role='menuitem']:has-text('Recent files')",
+            "priority": 2
+          }
+        ]
+      },
+      "deepResearch": {
+        "entry": [
+          {
+            "kind": "label",
+            "value": "도구",
+            "priority": 1
+          },
+          {
+            "kind": "label",
+            "value": "Tools",
+            "priority": 2
+          },
+          {
+            "kind": "label",
+            "value": "첨부",
+            "priority": 3
+          },
+          {
+            "kind": "text",
+            "value": "도구",
+            "priority": 1
+          },
+          {
+            "kind": "text",
+            "value": "Tools",
+            "priority": 2
+          },
+          {
+            "kind": "text",
+            "value": "+",
+            "priority": 3
+          },
+          {
+            "kind": "selector",
+            "value": "button[aria-label*='도구']",
+            "priority": 1
+          },
+          {
+            "kind": "selector",
+            "value": "button[aria-label*='Tools']",
+            "priority": 2
+          },
+          {
+            "kind": "selector",
+            "value": "button:has-text('+')",
+            "priority": 3
+          }
+        ],
+        "item": [
+          {
+            "kind": "label",
+            "value": "심층 리서치",
+            "priority": 1
+          },
+          {
+            "kind": "label",
+            "value": "Deep research",
+            "priority": 2
+          },
+          {
+            "kind": "text",
+            "value": "심층 리서치",
+            "priority": 1
+          },
+          {
+            "kind": "text",
+            "value": "Deep research",
+            "priority": 2
+          },
+          {
+            "kind": "selector",
+            "value": "[role='menuitem']:has-text('심층 리서치')",
+            "priority": 1
+          },
+          {
+            "kind": "selector",
+            "value": "[role='menuitem']:has-text('Deep research')",
+            "priority": 2
+          }
+        ]
+      },
+      "shoppingAssistant": {
+        "entry": [
+          {
+            "kind": "label",
+            "value": "도구",
+            "priority": 1
+          },
+          {
+            "kind": "label",
+            "value": "Tools",
+            "priority": 2
+          },
+          {
+            "kind": "label",
+            "value": "첨부",
+            "priority": 3
+          },
+          {
+            "kind": "text",
+            "value": "도구",
+            "priority": 1
+          },
+          {
+            "kind": "text",
+            "value": "Tools",
+            "priority": 2
+          },
+          {
+            "kind": "text",
+            "value": "+",
+            "priority": 3
+          },
+          {
+            "kind": "selector",
+            "value": "button[aria-label*='도구']",
+            "priority": 1
+          },
+          {
+            "kind": "selector",
+            "value": "button[aria-label*='Tools']",
+            "priority": 2
+          },
+          {
+            "kind": "selector",
+            "value": "button:has-text('+')",
+            "priority": 3
+          }
+        ],
+        "item": [
+          {
+            "kind": "label",
+            "value": "쇼핑 어시스턴트",
+            "priority": 1
+          },
+          {
+            "kind": "label",
+            "value": "Shopping assistant",
+            "priority": 2
+          },
+          {
+            "kind": "text",
+            "value": "쇼핑 어시스턴트",
+            "priority": 1
+          },
+          {
+            "kind": "text",
+            "value": "Shopping assistant",
+            "priority": 2
+          },
+          {
+            "kind": "selector",
+            "value": "[role='menuitem']:has-text('쇼핑 어시스턴트')",
+            "priority": 1
+          },
+          {
+            "kind": "selector",
+            "value": "[role='menuitem']:has-text('Shopping assistant')",
+            "priority": 2
+          }
+        ]
+      },
+      "webSearch": {
+        "entry": [
+          {
+            "kind": "label",
+            "value": "도구",
+            "priority": 1
+          },
+          {
+            "kind": "label",
+            "value": "Tools",
+            "priority": 2
+          },
+          {
+            "kind": "label",
+            "value": "첨부",
+            "priority": 3
+          },
+          {
+            "kind": "text",
+            "value": "도구",
+            "priority": 1
+          },
+          {
+            "kind": "text",
+            "value": "Tools",
+            "priority": 2
+          },
+          {
+            "kind": "text",
+            "value": "+",
+            "priority": 3
+          },
+          {
+            "kind": "selector",
+            "value": "button[aria-label*='도구']",
+            "priority": 1
+          },
+          {
+            "kind": "selector",
+            "value": "button[aria-label*='Tools']",
+            "priority": 2
+          },
+          {
+            "kind": "selector",
+            "value": "button:has-text('+')",
+            "priority": 3
+          }
+        ],
+        "item": [
+          {
+            "kind": "label",
+            "value": "웹 검색",
+            "priority": 1
+          },
+          {
+            "kind": "label",
+            "value": "Web search",
+            "priority": 2
+          },
+          {
+            "kind": "text",
+            "value": "웹 검색",
+            "priority": 1
+          },
+          {
+            "kind": "text",
+            "value": "Web search",
+            "priority": 2
+          },
+          {
+            "kind": "selector",
+            "value": "[role='menuitem']:has-text('웹 검색')",
+            "priority": 1
+          },
+          {
+            "kind": "selector",
+            "value": "[role='menuitem']:has-text('Web search')",
+            "priority": 2
+          }
+        ]
+      },
+      "study": {
+        "entry": [
+          {
+            "kind": "label",
+            "value": "도구",
+            "priority": 1
+          },
+          {
+            "kind": "label",
+            "value": "Tools",
+            "priority": 2
+          },
+          {
+            "kind": "label",
+            "value": "첨부",
+            "priority": 3
+          },
+          {
+            "kind": "text",
+            "value": "도구",
+            "priority": 1
+          },
+          {
+            "kind": "text",
+            "value": "Tools",
+            "priority": 2
+          },
+          {
+            "kind": "text",
+            "value": "+",
+            "priority": 3
+          },
+          {
+            "kind": "selector",
+            "value": "button[aria-label*='도구']",
+            "priority": 1
+          },
+          {
+            "kind": "selector",
+            "value": "button[aria-label*='Tools']",
+            "priority": 2
+          },
+          {
+            "kind": "selector",
+            "value": "button:has-text('+')",
+            "priority": 3
+          }
+        ],
+        "item": [
+          {
+            "kind": "label",
+            "value": "공부하기",
+            "priority": 1
+          },
+          {
+            "kind": "label",
+            "value": "Study and learn",
+            "priority": 2
+          },
+          {
+            "kind": "text",
+            "value": "공부하기",
+            "priority": 1
+          },
+          {
+            "kind": "text",
+            "value": "Study and learn",
+            "priority": 2
+          },
+          {
+            "kind": "selector",
+            "value": "[role='menuitem']:has-text('공부하기')",
+            "priority": 1
+          },
+          {
+            "kind": "selector",
+            "value": "[role='menuitem']:has-text('Study and learn')",
+            "priority": 2
+          }
+        ]
+      },
+      "more": {
+        "entry": [
+          {
+            "kind": "label",
+            "value": "도구",
+            "priority": 1
+          },
+          {
+            "kind": "label",
+            "value": "Tools",
+            "priority": 2
+          },
+          {
+            "kind": "label",
+            "value": "첨부",
+            "priority": 3
+          },
+          {
+            "kind": "text",
+            "value": "도구",
+            "priority": 1
+          },
+          {
+            "kind": "text",
+            "value": "Tools",
+            "priority": 2
+          },
+          {
+            "kind": "text",
+            "value": "+",
+            "priority": 3
+          },
+          {
+            "kind": "selector",
+            "value": "button[aria-label*='도구']",
+            "priority": 1
+          },
+          {
+            "kind": "selector",
+            "value": "button[aria-label*='Tools']",
+            "priority": 2
+          },
+          {
+            "kind": "selector",
+            "value": "button:has-text('+')",
+            "priority": 3
+          }
+        ],
+        "item": [
+          {
+            "kind": "label",
+            "value": "더 보기",
+            "priority": 1
+          },
+          {
+            "kind": "label",
+            "value": "More",
+            "priority": 2
+          },
+          {
+            "kind": "text",
+            "value": "더 보기",
+            "priority": 1
+          },
+          {
+            "kind": "text",
+            "value": "More",
+            "priority": 2
+          },
+          {
+            "kind": "selector",
+            "value": "[role='menuitem']:has-text('더 보기')",
+            "priority": 1
+          },
+          {
+            "kind": "selector",
+            "value": "[role='menuitem']:has-text('More')",
+            "priority": 2
+          }
+        ]
+      }
+    }
+  },
+  "promptBox": [
+    {
+      "kind": "label",
+      "value": "무엇을 도와드릴까요?",
+      "priority": 1
+    },
+    {
+      "kind": "label",
+      "value": "메시지 ChatGPT",
+      "priority": 2
+    },
+    {
+      "kind": "label",
+      "value": "Message ChatGPT",
+      "priority": 3
+    },
+    {
+      "kind": "text",
+      "value": "무엇을 도와드릴까요?",
+      "priority": 1
+    },
+    {
+      "kind": "text",
+      "value": "메시지 ChatGPT",
+      "priority": 2
+    },
+    {
+      "kind": "text",
+      "value": "Message ChatGPT",
+      "priority": 3
+    },
+    {
+      "kind": "selector",
+      "value": "textarea",
+      "priority": 1
+    },
+    {
+      "kind": "selector",
+      "value": "div[contenteditable='true']",
+      "priority": 2
+    },
+    {
+      "kind": "selector",
+      "value": "[role='textbox']",
+      "priority": 3
+    }
+  ],
+  "submit": [
+    {
+      "kind": "label",
+      "value": "보내기",
+      "priority": 1
+    },
+    {
+      "kind": "label",
+      "value": "Send prompt",
+      "priority": 2
+    },
+    {
+      "kind": "label",
+      "value": "전송",
+      "priority": 3
+    },
+    {
+      "kind": "text",
+      "value": "보내기",
+      "priority": 1
+    },
+    {
+      "kind": "text",
+      "value": "Send",
+      "priority": 2
+    },
+    {
+      "kind": "text",
+      "value": "전송",
+      "priority": 3
+    },
+    {
+      "kind": "selector",
+      "value": "button[aria-label*='보내기']",
+      "priority": 1
+    },
+    {
+      "kind": "selector",
+      "value": "button[aria-label*='Send']",
+      "priority": 2
+    },
+    {
+      "kind": "selector",
+      "value": "button[data-testid='send-button']",
+      "priority": 3
+    }
+  ]
+}

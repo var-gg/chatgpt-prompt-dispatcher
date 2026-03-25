@@ -7,6 +7,14 @@ test('validateConfig accepts a minimal valid config', () => {
     profileName: 'default',
     browser: { channel: 'chrome-user-session' },
     chatgpt: { mode: 'new-chat' },
+    ui: {
+      project: {},
+      newChat: {},
+      promptBox: {},
+      submit: {},
+      modeMenu: {},
+      toolsMenu: {}
+    }
   });
 
   assert.equal(result.profileName, 'default');

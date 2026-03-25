@@ -1,4 +1,5 @@
 const REQUIRED_TOP_LEVEL_KEYS = ['profileName', 'browser', 'chatgpt'];
+const REQUIRED_UI_KEYS = ['project', 'newChat', 'promptBox', 'submit', 'modeMenu', 'toolsMenu'];
 
 /**
  * Minimal config validator for early scaffolding.
@@ -21,6 +22,16 @@ export function validateConfig(config) {
 
   if (!config.chatgpt?.mode) {
     throw new Error('chatgpt.mode is required.');
+  }
+
+  if (!config.ui || typeof config.ui !== 'object') {
+    throw new Error('ui is required.');
+  }
+
+  for (const key of REQUIRED_UI_KEYS) {
+    if (!(key in config.ui)) {
+      throw new Error(`Missing required ui config key: ${key}`);
+    }
   }
 
   return config;

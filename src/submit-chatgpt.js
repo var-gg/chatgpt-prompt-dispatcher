@@ -5,6 +5,7 @@ import { validateConfig } from './config-schema.js';
 import { parseSubmitArgs } from './args.js';
 import { StepError, ERROR_CODES } from './errors.js';
 import { createReceipt, createFailureReceipt } from './receipt.js';
+import { buildFlowPlan } from './browser-flow.js';
 
 const CHATGPT_URL = 'https://chatgpt.com/';
 const SUPPORTED_MODES = new Set(['auto', 'latest', 'instant', 'thinking', 'pro']);
@@ -19,9 +20,11 @@ export async function submitChatgpt(argv = []) {
     const profile = validateConfig(await loadProfile(args.profile));
     const modeResolved = resolveMode(args.mode);
     const projectResolved = args.project || null;
+    const flowPlan = buildFlowPlan(profile, { ...args, mode: modeResolved, project: projectResolved });
     screenshotPath = resolveScreenshotPath(args.screenshotPath, args.profile);
 
     notes.push(`profile=${args.profile}`);
+    notes.push(`uiTier=${flowPlan.tier}`);
     if (args.browserProfileDir) {
       notes.push(`browserProfileDir=${path.resolve(args.browserProfileDir)}`);
     } else {
@@ -31,10 +34,15 @@ export async function submitChatgpt(argv = []) {
     if (args.dryRun) {
       notes.push('dryRun=true');
       notes.push(`wouldNavigate=${CHATGPT_URL}`);
+      notes.push(`projectAction=${flowPlan.project.action}`);
       if (projectResolved) notes.push(`wouldSelectProject=${projectResolved}`);
-      if (args.newChat) notes.push('wouldCreateNewChat=true');
+      notes.push(`newChatAction=${flowPlan.newChat.action}`);
+      notes.push(`modeAction=${flowPlan.mode.action}:${modeResolved}`);
       if (args.attachments.length) notes.push(`wouldAttachFiles=${args.attachments.length}`);
       notes.push(`promptLength=${args.prompt.length}`);
+      await captureDryRunScreenshot(screenshotPath, flowPlan);
+      notes.push(`flowPlanProfile=${flowPlan.profileName}`);
+      notes.push(`flowPlanLocale=${flowPlan.locale}`);
       return createReceipt({
         submitted: false,
         modeResolved,
@@ -78,8 +86,11 @@ export async function submitChatgpt(argv = []) {
       notes
     });
   } catch (error) {
+    const normalizedError = error instanceof StepError
+      ? error
+      : new StepError(error?.code || 'UNEXPECTED_ERROR', error?.step || 'unknown', error?.message || String(error));
     const failure = createFailureReceipt({
-      error,
+      error: normalizedError,
       screenshotPath,
       url: currentUrl,
       notes
@@ -104,6 +115,13 @@ function resolveScreenshotPath(explicitPath, profileName) {
 
 async function ensureParentDir(filePath) {
   await mkdir(path.dirname(filePath), { recursive: true });
+}
+
+async function captureDryRunScreenshot(screenshotPath, flowPlan) {
+  await ensureParentDir(screenshotPath);
+  const { writeFile } = await import('node:fs/promises');
+  const payload = Buffer.from(`DRY-RUN\n${JSON.stringify(flowPlan, null, 2)}\n`, 'utf8');
+  await writeFile(screenshotPath, payload);
 }
 
 async function createAutomationSession({ profile, args, screenshotPath, notes }) {

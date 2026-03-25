@@ -423,6 +423,7 @@ function Invoke-Method($method, $params) {
         Send-UnicodeChars([string]$params.text)
       } else {
         $mods = @($params.modifiers)
+        $keyDelayMs = if ($null -ne $params.keyDelayMs) { [Math]::Max(0, [int]$params.keyDelayMs) } else { 0 }
         foreach ($mod in $mods) {
           switch -Regex ($mod) {
             'ctrl' { Send-KeyInput 0x11 }
@@ -430,19 +431,21 @@ function Invoke-Method($method, $params) {
             'shift' { Send-KeyInput 0x10 }
             'win' { Send-KeyInput 0x5B }
           }
+          if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }
         }
         switch -Regex ([string]$params.key) {
-          '^enter$' { Send-KeyInput 0x0D; Send-KeyInput 0x0D $true }
-          '^tab$' { Send-KeyInput 0x09; Send-KeyInput 0x09 $true }
-          '^escape$' { Send-KeyInput 0x1B; Send-KeyInput 0x1B $true }
-          '^v$' { Send-KeyInput 0x56; Send-KeyInput 0x56 $true }
-          '^c$' { Send-KeyInput 0x43; Send-KeyInput 0x43 $true }
-          '^l$' { Send-KeyInput 0x4C; Send-KeyInput 0x4C $true }
-          '^t$' { Send-KeyInput 0x54; Send-KeyInput 0x54 $true }
-          '^a$' { Send-KeyInput 0x41; Send-KeyInput 0x41 $true }
-          '^0$' { Send-KeyInput 0x30; Send-KeyInput 0x30 $true }
+          '^enter$' { Send-KeyInput 0x0D; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x0D $true }
+          '^tab$' { Send-KeyInput 0x09; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x09 $true }
+          '^escape$' { Send-KeyInput 0x1B; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x1B $true }
+          '^v$' { Send-KeyInput 0x56; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x56 $true }
+          '^c$' { Send-KeyInput 0x43; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x43 $true }
+          '^l$' { Send-KeyInput 0x4C; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x4C $true }
+          '^t$' { Send-KeyInput 0x54; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x54 $true }
+          '^a$' { Send-KeyInput 0x41; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x41 $true }
+          '^0$' { Send-KeyInput 0x30; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x30 $true }
           default { throw (New-ErrorResult 'UNSUPPORTED_KEY' "Unsupported key: $($params.key)") }
         }
+        if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }
         for ($i = $mods.Count - 1; $i -ge 0; $i--) {
           switch -Regex ($mods[$i]) {
             'ctrl' { Send-KeyInput 0x11 $true }
@@ -450,6 +453,7 @@ function Invoke-Method($method, $params) {
             'shift' { Send-KeyInput 0x10 $true }
             'win' { Send-KeyInput 0x5B $true }
           }
+          if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }
         }
       }
       return @{ ok = $true }

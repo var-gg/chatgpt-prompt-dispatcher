@@ -29,6 +29,9 @@ import { chooseVerifiedChatGptWindow, isChatGptUrl } from './window-targeting.js
 
 const CHATGPT_URL = 'https://chatgpt.com/';
 const CHATGPT_HOST = 'chatgpt.com';
+const COMPOSER_FOCUS_SETTLE_MS = 220;
+const PASTE_KEY_DELAY_MS = 90;
+const POST_PASTE_SETTLE_MS = 320;
 const OMNIBOX_HINTS = [
   '주소창',
   'address',
@@ -541,29 +544,17 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
 
   try {
     await refocusComposer(handle, promptFocus, stepDelayMs);
+    await settleAfterComposerFocus(stepDelayMs);
     await clearComposer(stepDelayMs);
-    await sendText(prompt);
-    const directProof = await waitForPromptPresence(handle, prompt, stepDelayMs, 'uia-focus+unicode-sendkeys');
-    if (directProof.ok) {
-      const visibleProof = await waitForVisibleSendState(handle, prompt, beforeSubmitState, stepDelayMs, 'uia-focus+unicode-sendkeys');
-      return mergePromptInsertionProof({
-        baseMethod: 'uia-focus+unicode-sendkeys',
-        expectedHash,
-        promptProof: directProof,
-        visibleProof,
-        beforeSubmitState
-      });
-    }
-
-    await refocusComposer(handle, promptFocus, stepDelayMs);
     await setClipboardText(prompt);
     await delay(stepDelayMs);
-    await pasteClipboard();
-    const clipboardProof = await waitForPromptPresence(handle, prompt, stepDelayMs, 'uia-focus+clipboard-paste');
+    await pasteClipboard({ slow: true, keyDelayMs: PASTE_KEY_DELAY_MS });
+    await settleAfterPaste(stepDelayMs);
+    const clipboardProof = await waitForPromptPresence(handle, prompt, stepDelayMs, 'uia-focus+slow-clipboard-paste');
     if (clipboardProof.ok) {
-      const visibleProof = await waitForVisibleSendState(handle, prompt, beforeSubmitState, stepDelayMs, 'uia-focus+clipboard-paste');
+      const visibleProof = await waitForVisibleSendState(handle, prompt, beforeSubmitState, stepDelayMs, 'uia-focus+slow-clipboard-paste');
       return mergePromptInsertionProof({
-        baseMethod: 'uia-focus+clipboard-paste',
+        baseMethod: 'uia-focus+slow-clipboard-paste',
         expectedHash,
         promptProof: clipboardProof,
         visibleProof,
@@ -623,15 +614,35 @@ function mergePromptInsertionProof({ baseMethod, expectedHash, promptProof, visi
 
 async function validatePromptInput(handle, prompt, promptFocus, insertion, stepDelayMs) {
   const expectedHash = hashText(prompt);
+  const insertionHashMatched = insertion?.actualHash === expectedHash;
+  const promptFocusLooksCredible = looksLikeComposerElement(promptFocus?.focusedElement) || looksLikeComposerElement(promptFocus?.element);
 
-  await refocusComposer(handle, promptFocus, stepDelayMs);
+  if (insertionHashMatched && promptFocusLooksCredible) {
+    return {
+      method: `${insertion?.method || 'unknown'}+focus-safe-hash-proof`,
+      expectedHash,
+      actualHash: insertion.actualHash,
+      clipboardHash: expectedHash,
+      focusedElement: insertion.focusedElement || promptFocus?.focusedElement || null,
+      composerElement: insertion.composerElement || promptFocus?.element || null,
+      proof: 'promptHashMatchedAfterFocusedPaste',
+      composerTextSample: String(insertion?.composerTextSample || prompt).slice(0, 200),
+      beforeSubmitState: insertion?.beforeSubmitState,
+      afterSubmitState: insertion?.afterSubmitState || insertion?.beforeSubmitState || null,
+      visibleSendStateProven: Boolean(insertion?.visibleSendStateProven)
+    };
+  }
+
   const verifiedProof = await waitForCondition({
     step: 'validate-prompt',
-    attempts: 5,
+    attempts: 3,
     delayMs: stepDelayMs,
+    action: async () => {
+      await focusWindow(handle).catch(() => {});
+      await refocusComposer(handle, promptFocus, stepDelayMs).catch(() => {});
+    },
     verify: async () => {
       const proof = await readComposerProof(handle);
-      const submitState = await sampleVisibleSubmitState(handle);
       ensurePromptTargetLooksCredible({
         promptFocus,
         focusedElement: proof.focusedElement,
@@ -640,15 +651,12 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
         actualHash: hashText(proof.text)
       });
       const promptPresent = proof.text.includes(prompt);
-      const sendTransitionProven = hasVisibleSendStateTransition(insertion?.beforeSubmitState, submitState);
       return {
         ok: promptPresent,
-        proof: promptPresent
-          ? (sendTransitionProven ? 'visibleSendButtonTransitionProven' : 'promptPresentComposerCredibleVisibleSendStateUnproven')
-          : 'composerTextStillHydrating',
+        proof: promptPresent ? 'promptPresentComposerCredible' : 'composerTextStillHydrating',
         ...proof,
-        submitState,
-        sendTransitionProven
+        submitState: insertion?.afterSubmitState || insertion?.beforeSubmitState || null,
+        sendTransitionProven: Boolean(insertion?.visibleSendStateProven)
       };
     },
     failureCode: 'PROMPT_VALIDATION_FAILED',
@@ -656,7 +664,7 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
   });
 
   return {
-    method: `${insertion?.method || 'unknown'}+composer-present-proof`,
+    method: `${insertion?.method || 'unknown'}+light-composer-present-proof`,
     expectedHash,
     actualHash: hashText(verifiedProof.text),
     clipboardHash: expectedHash,
@@ -710,6 +718,14 @@ async function refocusComposer(handle, promptFocus, stepDelayMs) {
 async function clearComposer(stepDelayMs) {
   await sendKeys('a', ['ctrl']);
   await delay(stepDelayMs);
+}
+
+async function settleAfterComposerFocus(stepDelayMs) {
+  await delay(Math.max(stepDelayMs, COMPOSER_FOCUS_SETTLE_MS));
+}
+
+async function settleAfterPaste(stepDelayMs) {
+  await delay(Math.max(stepDelayMs * 2, POST_PASTE_SETTLE_MS));
 }
 
 async function clickComposerCenter(element, fallbackPoint) {
@@ -836,6 +852,9 @@ function looksLikeComposerElement(element) {
 }
 
 async function submitPrompt(handle, submitPoint, stepDelayMs, prompt, promptFocus, preferredMethod = 'click') {
+  await focusWindow(handle).catch(() => {});
+  await refocusComposer(handle, promptFocus, stepDelayMs).catch(() => {});
+  await settleAfterComposerFocus(stepDelayMs);
   const ready = await verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs);
   const before = ready.sample;
   const plannedMethods = buildSubmitAttemptOrder(preferredMethod, before.submitButton);

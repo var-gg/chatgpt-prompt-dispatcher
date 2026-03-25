@@ -39,18 +39,23 @@ export async function getClipboardText() {
 
 const SPECIAL_KEYS = new Set(['enter', 'v', 'c', 'l', 't', 'a', '0', 'tab', 'escape']);
 
-export async function sendKeys(keys, modifiers = []) {
+export async function sendKeys(keys, modifiers = [], options = {}) {
   if (typeof keys === 'string' && !SPECIAL_KEYS.has(keys.toLowerCase()) && modifiers.length === 0) {
     return client().call('sendKeys', { text: keys }, { step: 'desktop-send-keys', timeoutMs: 5000 });
   }
-  return client().call('sendKeys', { key: keys, modifiers }, { step: 'desktop-send-keys', timeoutMs: 5000 });
+  const { keyDelayMs = 0 } = options || {};
+  return client().call('sendKeys', { key: keys, modifiers, keyDelayMs }, { step: 'desktop-send-keys', timeoutMs: 5000 + (keyDelayMs * 6) });
 }
 
 export async function sendText(text) {
   return client().call('sendKeys', { text }, { step: 'desktop-send-text', timeoutMs: 10000 });
 }
 
-export async function pasteClipboard() {
+export async function pasteClipboard(options = {}) {
+  const { slow = false, keyDelayMs = 75 } = options || {};
+  if (slow) {
+    return sendKeys('v', ['ctrl'], { keyDelayMs });
+  }
   return sendKeys('v', ['ctrl']);
 }
 

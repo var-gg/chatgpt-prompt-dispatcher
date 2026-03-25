@@ -21,7 +21,7 @@ function parseCommonArgs(argv = [], options = {}) {
     calibrationProfile: 'default',
     stepDelayMs: 150,
     submit: true,
-    submitMethod: 'click',
+    submitMethod: 'enter',
     ...options
   };
 

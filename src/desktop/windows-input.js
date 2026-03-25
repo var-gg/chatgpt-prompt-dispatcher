@@ -68,6 +68,14 @@ export async function getUrlViaOmnibox(target = {}) {
   return client().call('getUrlViaOmnibox', target, { step: 'desktop-get-url-omnibox', timeoutMs: 8000 });
 }
 
+export async function getCursorPos() {
+  return client().call('getCursorPos', {}, { step: 'desktop-get-cursor-pos', timeoutMs: 3000 });
+}
+
+export async function uiaElementFromPoint(x, y) {
+  return client().call('uiaElementFromPoint', { x, y }, { step: 'desktop-uia-from-point', timeoutMs: 5000 });
+}
+
 export async function uiaQueryByNameRole(target = {}, query = {}) {
   return client().call('uiaQueryByNameRole', { ...target, ...query }, { step: 'desktop-uia-query', timeoutMs: query.timeoutMs || 5000 });
 }

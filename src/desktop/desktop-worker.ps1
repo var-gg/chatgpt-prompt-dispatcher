@@ -61,7 +61,10 @@ public static class DesktopWorkerWin32 {
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll")] public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+  [StructLayout(LayoutKind.Sequential)]
+  public struct POINT { public int X; public int Y; }
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+  [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT lpPoint);
   [DllImport("user32.dll")] public static extern IntPtr GetMessageExtraInfo();
 }
 '@
@@ -267,10 +270,29 @@ function Convert-UiaElement($element) {
   [pscustomobject]@{
     name = $element.Current.Name
     role = $element.Current.ControlType.ProgrammaticName
+    controlType = $element.Current.ControlType.LocalizedControlType
     automationId = $element.Current.AutomationId
+    className = $element.Current.ClassName
     hasKeyboardFocus = $element.Current.HasKeyboardFocus
     rect = @{ x = [int]$rect.Left; y = [int]$rect.Top; width = [int]$rect.Width; height = [int]$rect.Height }
   }
+}
+
+function Build-UiaSnapshot($element, [int]$depth = 2) {
+  if (-not $element) { return $null }
+  $node = Convert-UiaElement $element
+  if ($depth -le 0) { return $node }
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $children = New-Object System.Collections.Generic.List[object]
+  $child = $walker.GetFirstChild($element)
+  $count = 0
+  while ($child -and $count -lt 12) {
+    $children.Add((Build-UiaSnapshot $child ($depth - 1))) | Out-Null
+    $child = $walker.GetNextSibling($child)
+    $count++
+  }
+  $node | Add-Member -NotePropertyName children -NotePropertyValue @($children) -Force
+  return $node
 }
 
 function Invoke-Method($method, $params) {
@@ -372,6 +394,27 @@ function Invoke-Method($method, $params) {
       } finally {
         [System.Windows.Forms.Clipboard]::SetText($saved)
       }
+    }
+    'getCursorPos' {
+      $point = New-Object DesktopWorkerWin32+POINT
+      [void][DesktopWorkerWin32]::GetCursorPos([ref]$point)
+      return @{ point = @{ x = $point.X; y = $point.Y } }
+    }
+    'uiaElementFromPoint' {
+      $pt = New-Object System.Windows.Point([double]$params.x, [double]$params.y)
+      $element = [System.Windows.Automation.AutomationElement]::FromPoint($pt)
+      if (-not $element) { throw (New-ErrorResult 'UIA_EMPTY' 'No UI Automation element found at the given point.') }
+      return @{ element = (Convert-UiaElement $element) }
+    }
+    'uiaSnapshot' {
+      $window = Resolve-Window $params
+      if (-not $window) { throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Window not found.') }
+      $depth = if ($null -ne $params.depth) { [int]$params.depth } else { 2 }
+      $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+      if (-not $focused) { throw (New-ErrorResult 'UIA_EMPTY' 'No focused UI Automation element found for snapshot.') }
+      $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+      $parent = $walker.GetParent($focused)
+      return @{ tree = [pscustomobject]@{ parent = (Build-UiaSnapshot $parent 1); focused = (Build-UiaSnapshot $focused $depth) } }
     }
     'uiaQueryByNameRole' {
       $window = Resolve-Window $params

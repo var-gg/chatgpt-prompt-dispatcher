@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "profileName": "default",
   "app": "chatgpt-desktop-dispatcher",
   "window": {
@@ -12,12 +12,57 @@
     }
   },
   "anchors": {
-    "promptInput": { "x": 0.5, "y": 0.92 },
-    "submitButton": { "x": 0.965, "y": 0.92 },
-    "newChatButton": { "x": 0.085, "y": 0.14 }
+    "promptInput": {
+      "x": 0.5,
+      "y": 0.92,
+      "accessible": {
+        "name": "Message ChatGPT",
+        "role": "ControlType.Edit",
+        "controlType": "edit"
+      }
+    },
+    "submitButton": {
+      "x": 0.965,
+      "y": 0.92,
+      "accessible": {
+        "name": "Send",
+        "role": "ControlType.Button",
+        "controlType": "button"
+      }
+    },
+    "newChatButton": {
+      "x": 0.085,
+      "y": 0.14,
+      "accessible": {
+        "name": "New chat",
+        "role": "ControlType.Button",
+        "controlType": "button"
+      }
+    },
+    "modeButton": {
+      "x": 0.78,
+      "y": 0.92,
+      "accessible": null
+    },
+    "projectButton": {
+      "x": 0.12,
+      "y": 0.18,
+      "accessible": null
+    },
+    "toolsButton": {
+      "x": 0.05,
+      "y": 0.92,
+      "accessible": null
+    },
+    "attachButton": {
+      "x": 0.05,
+      "y": 0.92,
+      "accessible": null
+    }
   },
   "notes": [
     "Bootstrap calibration profile for standardized Chrome window.",
-    "Adjust normalized anchors per actual ChatGPT UI tier if needed."
+    "Update all anchors with calibrate-desktop-chatgpt before relying on drift-sensitive controls.",
+    "Fallback order is UIA > keyboard/omnibox > calibrated coordinates."
   ]
 }

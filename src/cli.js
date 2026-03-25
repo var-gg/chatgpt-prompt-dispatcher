@@ -5,6 +5,8 @@ import { submitBrowserChatgpt } from './submit-browser-chatgpt.js';
 import { warmupChatgpt } from './warmup-chatgpt.js';
 import { runSmoke } from './smoke.js';
 import { submitDesktopChatgpt } from './desktop/submit-desktop-chatgpt.js';
+import { calibrateDesktopChatgpt } from './desktop/calibrate-desktop-chatgpt.js';
+import { inspectDesktopChatgpt } from './desktop/inspect-desktop-chatgpt.js';
 
 /**
  * CLI entrypoint scaffold.
@@ -54,6 +56,18 @@ export async function runCli(argv = []) {
     return;
   }
 
+  if (command === 'calibrate-desktop-chatgpt') {
+    const result = await calibrateDesktopChatgpt(argv.slice(1));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === 'inspect-desktop-chatgpt') {
+    const result = await inspectDesktopChatgpt(argv.slice(1));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
   throw new Error(`Unknown command: ${command}`);
 }
 
@@ -62,13 +76,15 @@ function printHelp() {
     'chatgpt-prompt-dispatcher',
     '',
     'Commands:',
-    '  help                     Show help',
-    '  profile:show <name>      Load and print a sample profile',
-    '  smoke                           Run placeholder smoke check',
-    '  submit-chatgpt [opts]           Submit a prompt through the default Windows desktop transport',
-    '  submit-browser-chatgpt [opts]   Submit through the experimental browser transport (Playwright)',
-    '  warmup-chatgpt [opts]           Open ChatGPT and hold the browser for manual login/captcha',
-    '  submit-desktop-chatgpt [opts]   Explicit alias for the default Windows desktop transport',
+    '  help                              Show help',
+    '  profile:show <name>               Load and print a sample profile',
+    '  smoke                             Run placeholder smoke check',
+    '  submit-chatgpt [opts]             Submit a prompt through the default Windows desktop transport',
+    '  submit-browser-chatgpt [opts]     Submit through the experimental browser transport (Playwright)',
+    '  warmup-chatgpt [opts]             Open ChatGPT and hold the browser for manual login/captcha',
+    '  submit-desktop-chatgpt [opts]     Explicit alias for the default Windows desktop transport',
+    '  calibrate-desktop-chatgpt [opts]  Interactively capture desktop anchors and save a calibration profile',
+    '  inspect-desktop-chatgpt [opts]    Dump URL, window rect, focus element, and UIA snapshot as JSON',
     '',
     'Transport notes:',
     '  - submit-chatgpt defaults to the Windows desktop input dispatcher',

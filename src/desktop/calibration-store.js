@@ -40,12 +40,15 @@ export function validateCalibrationProfile(profile) {
     throw new StepError(ERROR_CODES.INVALID_ARGS, 'desktop-calibration', 'Calibration profile must be an object.');
   }
   getStandardWindowBounds(profile);
-  const anchorNames = ['promptInput', 'submitButton'];
-  for (const anchorName of anchorNames) {
+  const requiredAnchorNames = ['promptInput', 'submitButton'];
+  for (const anchorName of requiredAnchorNames) {
     assertNormalizedPoint(profile?.anchors?.[anchorName], `anchors.${anchorName}`);
   }
-  if (profile?.anchors?.newChatButton) {
-    assertNormalizedPoint(profile.anchors.newChatButton, 'anchors.newChatButton');
+  const optionalAnchorNames = ['newChatButton', 'modeButton', 'projectButton', 'toolsButton', 'attachButton'];
+  for (const anchorName of optionalAnchorNames) {
+    if (profile?.anchors?.[anchorName]) {
+      assertNormalizedPoint(profile.anchors[anchorName], `anchors.${anchorName}`);
+    }
   }
   return profile;
 }

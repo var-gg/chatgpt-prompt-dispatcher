@@ -67,6 +67,7 @@ export async function submitDesktopChatgpt(argv = []) {
 
     notes.push('transport=desktop');
     notes.push('transportStatus=default');
+    notes.push('fallbackOrder=UIA>keyboard-omnibox>calibrated-coordinates');
     notes.push('desktopMode=deterministic-submit');
     notes.push(`calibrationProfile=${args.calibrationProfile}`);
     notes.push(`titleHint=${titleHint}`);

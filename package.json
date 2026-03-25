@@ -1,0 +1,17 @@
+{
+  "name": "chatgpt-prompt-dispatcher",
+  "version": "0.1.0",
+  "description": "Local browser automation for dispatching prompts into a logged-in ChatGPT web session on Windows.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"No tests yet\""
+  },
+  "keywords": [
+    "chatgpt",
+    "browser-automation",
+    "windows",
+    "openclaw"
+  ],
+  "author": "",
+  "license": "MIT"
+}

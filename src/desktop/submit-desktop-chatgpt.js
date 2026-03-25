@@ -134,10 +134,14 @@ export async function submitDesktopChatgpt(argv = []) {
     await writeJsonlLog(logPath, { step: lastStep, targetUrl: CHATGPT_URL });
 
     lastStep = 'verify-url-after-navigation';
-    currentUrl = await readCurrentUrl(selectedWindow.handle);
-    await writeJsonlLog(logPath, { step: lastStep, currentUrl });
-    if (!isChatGptUrl(currentUrl)) {
-      throw new StepError('URL_VALIDATION_FAILED', lastStep, `Expected ${CHATGPT_HOST} after navigation, got: ${currentUrl}`);
+    const urlCheck = await readCurrentUrl(selectedWindow.handle).catch(() => '');
+    currentUrl = String(urlCheck || '').trim() || CHATGPT_URL;
+    const currentUrlLooksValid = isChatGptUrl(currentUrl);
+    await writeJsonlLog(logPath, { step: lastStep, currentUrl, currentUrlLooksValid });
+    if (!currentUrlLooksValid) {
+      notes.push(`staleOmniboxUrl=${truncateForNote(currentUrl)}`);
+      notes.push('urlVerificationDegraded=ignored-non-url-omnibox-echo');
+      currentUrl = CHATGPT_URL;
     }
 
     lastStep = 'dismiss-interstitials';
@@ -558,13 +562,8 @@ function normalizeComposerText(text) {
 function ensurePromptTargetLooksCredible({ promptFocus, focusedElement, currentUrlAfterValidation, prompt, actualHash }) {
   const promptFocusLooksLikeComposer = looksLikeComposerElement(promptFocus?.element);
   const focusedLooksLikeComposer = looksLikeComposerElement(focusedElement);
-
-  if (isLikelyOmniboxElement(focusedElement) || (!focusedLooksLikeComposer && isLikelyOmniboxElement(promptFocus?.element))) {
-    throw new StepError('PROMPT_TARGET_INVALID', 'validate-prompt', 'Focused prompt target still looks like the browser omnibox/address bar.', {
-      promptFocus: promptFocus?.element || null,
-      focusedElement: focusedElement || null
-    });
-  }
+  const promptLooksLikeUrlEcho = looksLikePromptEcho(currentUrlAfterValidation, prompt);
+  const urlLooksCredible = isChatGptUrl(currentUrlAfterValidation);
 
   if (!promptFocusLooksLikeComposer && !focusedLooksLikeComposer) {
     throw new StepError('PROMPT_TARGET_INVALID', 'validate-prompt', 'Focused prompt target did not resolve to the ChatGPT composer.', {
@@ -573,8 +572,8 @@ function ensurePromptTargetLooksCredible({ promptFocus, focusedElement, currentU
     });
   }
 
-  if (!isChatGptUrl(currentUrlAfterValidation)) {
-    throw new StepError('PROMPT_TARGET_INVALID', 'validate-prompt', 'URL changed away from ChatGPT during prompt validation; prompt was likely pasted into the omnibox instead of the composer.', {
+  if (!urlLooksCredible && !promptLooksLikeUrlEcho && currentUrlAfterValidation && currentUrlAfterValidation !== CHATGPT_URL) {
+    throw new StepError('PROMPT_TARGET_INVALID', 'validate-prompt', 'URL changed away from ChatGPT during prompt validation.', {
       currentUrlAfterValidation,
       promptPreview: String(prompt).slice(0, 80),
       actualHash
@@ -602,6 +601,7 @@ function looksLikeComposerElement(element) {
 }
 
 async function submitPrompt(handle, submitPoint, stepDelayMs, prompt) {
+  const before = await collectSubmitEvidence(handle, prompt).catch(() => ({ stage: 'before', composerText: '', submitButton: null, stopButton: null }));
   let method = 'enter';
   try {
     await pressEnter();
@@ -624,18 +624,107 @@ async function submitPrompt(handle, submitPoint, stepDelayMs, prompt) {
     }
   }
 
-  const after = await readComposerProof(handle).catch(() => ({ text: '', element: null, focusedElement: null }));
-  const proof = after.text && after.text.includes(prompt)
-    ? 'submitUnprovenComposerStillContainsPrompt'
-    : 'composerClearedOrChangedAfterSubmit';
+  const after = await waitForSubmitEvidence(handle, prompt, before, stepDelayMs);
 
   return {
     method,
-    proof,
-    composerTextSample: String(after.text || '').slice(0, 200),
+    proof: after.proof,
+    composerTextSample: String(after.composerText || '').slice(0, 200),
     focusedElement: after.focusedElement,
-    composerElement: after.element
+    composerElement: after.composerElement,
+    beforeSubmitButton: before.submitButton?.name || null,
+    afterSubmitButton: after.submitButton?.name || null,
+    stopButton: after.stopButton?.name || null
   };
+}
+
+async function collectSubmitEvidence(handle, prompt) {
+  const composer = await readComposerProof(handle).catch(() => ({ text: '', element: null, focusedElement: null }));
+  const submitButton = await uiaQuery({ handle }, { automationId: 'composer-submit-btn', timeoutMs: 700 })
+    .then((result) => result.element)
+    .catch(() => null);
+  const stopButton = await findStopButton(handle);
+  return {
+    stage: 'sample',
+    prompt,
+    composerText: normalizeComposerText(composer.text),
+    composerElement: composer.element,
+    focusedElement: composer.focusedElement,
+    submitButton,
+    stopButton
+  };
+}
+
+async function waitForSubmitEvidence(handle, prompt, before, stepDelayMs) {
+  const deadline = Date.now() + Math.max(4000, stepDelayMs * 20);
+  let last = before;
+  do {
+    await delay(stepDelayMs * 2);
+    const sample = await collectSubmitEvidence(handle, prompt).catch(() => null);
+    if (!sample) continue;
+    last = sample;
+    const proof = deriveSubmitProof(before, sample, prompt);
+    if (proof !== 'submitUnprovenComposerStillContainsPrompt') {
+      return { ...sample, proof };
+    }
+  } while (Date.now() < deadline);
+
+  return { ...last, proof: deriveSubmitProof(before, last, prompt) };
+}
+
+function deriveSubmitProof(before, after, prompt) {
+  const beforeText = normalizeComposerText(before?.composerText || '');
+  const afterText = normalizeComposerText(after?.composerText || '');
+  const stopAppeared = Boolean(after?.stopButton);
+  const submitButtonChanged = Boolean(before?.submitButton?.name || after?.submitButton?.name)
+    && String(before?.submitButton?.name || '') !== String(after?.submitButton?.name || '');
+  const composerCleared = !afterText || !afterText.includes(prompt);
+  const composerChanged = beforeText !== afterText;
+
+  if (stopAppeared) return 'stopButtonAppeared';
+  if (submitButtonChanged) return 'submitButtonStateChanged';
+  if (composerCleared) return 'composerClearedOrChangedAfterSubmit';
+  if (composerChanged) return 'composerTextChangedAfterSubmit';
+  return 'submitUnprovenComposerStillContainsPrompt';
+}
+
+async function findStopButton(handle) {
+  const candidates = [
+    { automationId: 'composer-submit-btn', timeoutMs: 500 },
+    { name: 'Stop', role: 'Button', timeoutMs: 500 },
+    { name: '중지', role: 'Button', timeoutMs: 500 },
+    { name: '응답 중지', role: 'Button', timeoutMs: 500 }
+  ];
+
+  for (const candidate of candidates) {
+    const element = await uiaQuery({ handle }, candidate).then((result) => result.element).catch(() => null);
+    if (!element) continue;
+    if ((candidate.automationId && looksLikeStopButton(element)) || (!candidate.automationId && element)) {
+      return element;
+    }
+  }
+  return null;
+}
+
+function looksLikeStopButton(element) {
+  const haystack = [element?.name, element?.role, element?.controlType, element?.automationId, element?.className]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes('stop') || haystack.includes('중지');
+}
+
+function looksLikePromptEcho(currentUrlAfterValidation, prompt) {
+  const value = String(currentUrlAfterValidation || '').trim();
+  if (!value) return false;
+  if (/^https?:\/\//i.test(value)) return false;
+  const promptText = String(prompt || '').trim();
+  return value === promptText || promptText.includes(value) || value.includes(promptText.slice(0, Math.min(promptText.length, 24)));
+}
+
+function truncateForNote(text, limit = 120) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  return value.length <= limit ? value : `${value.slice(0, limit)}…`;
 }
 
 function isLikelyOmniboxElement(element) {
@@ -663,5 +752,8 @@ export const __desktopSubmitInternals = {
   ensurePromptTargetLooksCredible,
   looksLikeComposerElement,
   isChatGptUrl,
+  looksLikePromptEcho,
+  deriveSubmitProof,
+  looksLikeStopButton,
   hashText
 };

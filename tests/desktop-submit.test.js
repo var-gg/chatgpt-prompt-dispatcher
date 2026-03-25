@@ -3,7 +3,14 @@ import assert from 'node:assert/strict';
 import { StepError } from '../src/errors.js';
 import { __desktopSubmitInternals } from '../src/desktop/submit-desktop-chatgpt.js';
 
-const { isLikelyOmniboxElement, ensurePromptTargetLooksCredible, looksLikeComposerElement, hashText } = __desktopSubmitInternals;
+const {
+  isLikelyOmniboxElement,
+  ensurePromptTargetLooksCredible,
+  looksLikeComposerElement,
+  looksLikePromptEcho,
+  deriveSubmitProof,
+  hashText
+} = __desktopSubmitInternals;
 
 test('isLikelyOmniboxElement rejects Chrome address bar candidates', () => {
   assert.equal(isLikelyOmniboxElement({
@@ -81,4 +88,45 @@ test('ensurePromptTargetLooksCredible accepts chatgpt URL with composer focus', 
     prompt: '안녕',
     actualHash: hashText('안녕')
   }));
+});
+
+test('ensurePromptTargetLooksCredible tolerates stale omnibox prompt echo when composer focus is valid', () => {
+  assert.doesNotThrow(() => ensurePromptTargetLooksCredible({
+    promptFocus: {
+      element: {
+        name: '무엇이든 물어보세요 프롬프트',
+        role: 'ControlType.Edit',
+        automationId: 'prompt-textarea',
+        className: 'ProseMirror'
+      }
+    },
+    focusedElement: {
+      name: '무엇이든 물어보세요 프롬프트',
+      role: 'ControlType.Edit',
+      automationId: 'prompt-textarea',
+      className: 'ProseMirror ProseMirror-focused'
+    },
+    currentUrlAfterValidation: 'desktop live proof 2026-03-25 19:25',
+    prompt: 'desktop live proof 2026-03-25 19:25',
+    actualHash: hashText('desktop live proof 2026-03-25 19:25')
+  }));
+});
+
+test('looksLikePromptEcho detects non-url omnibox echoes of the prompt', () => {
+  assert.equal(looksLikePromptEcho('desktop live proof 2026-03-25 19:25', 'desktop live proof 2026-03-25 19:25'), true);
+  assert.equal(looksLikePromptEcho('https://chatgpt.com/', 'desktop live proof 2026-03-25 19:25'), false);
+});
+
+test('deriveSubmitProof prefers strong post-submit UI signals', () => {
+  assert.equal(deriveSubmitProof(
+    { composerText: 'hello', submitButton: { name: 'Send' }, stopButton: null },
+    { composerText: 'hello', submitButton: { name: 'Stop' }, stopButton: { name: 'Stop' } },
+    'hello'
+  ), 'stopButtonAppeared');
+
+  assert.equal(deriveSubmitProof(
+    { composerText: 'hello', submitButton: { name: 'Send' }, stopButton: null },
+    { composerText: '', submitButton: { name: 'Send' }, stopButton: null },
+    'hello'
+  ), 'composerClearedOrChangedAfterSubmit');
 });

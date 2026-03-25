@@ -17,7 +17,6 @@ import {
   pasteClipboard,
   pressEnter,
   resizeWindow,
-  rightClickPoint,
   sendKeys,
   setClipboardText,
   uiaGetFocusedElement,
@@ -26,6 +25,15 @@ import {
 
 const CHATGPT_URL = 'https://chatgpt.com/';
 const CHATGPT_HOST = 'chatgpt.com';
+const OMNIBOX_HINTS = [
+  '주소창',
+  'address',
+  'search',
+  'omnibox',
+  'url',
+  'view_1012',
+  'omniboxviewviews'
+];
 
 function enforceDesktopFirstConstraints(args) {
   if (args.project) {
@@ -138,6 +146,10 @@ export async function submitDesktopChatgpt(argv = []) {
     lastStep = 'focus-prompt';
     const promptFocus = await focusPromptBox(selectedWindow.handle, promptPoint, args.stepDelayMs);
     lastFocusedElement = promptFocus.focusedElement ?? null;
+    notes.push(`promptFocusVia=${promptFocus.via}`);
+    if (promptFocus.omniboxRejected) {
+      notes.push('omniboxRejected=true');
+    }
     await writeJsonlLog(logPath, { step: lastStep, promptFocus });
 
     lastStep = 'set-prompt-clipboard';
@@ -151,10 +163,12 @@ export async function submitDesktopChatgpt(argv = []) {
     await writeJsonlLog(logPath, { step: lastStep });
 
     lastStep = 'validate-prompt';
-    const validation = await validatePromptInput(args.prompt, args.stepDelayMs);
+    const validation = await validatePromptInput(selectedWindow.handle, args.prompt, promptFocus, args.stepDelayMs);
     clipboardHash = validation.clipboardHash;
     lastFocusedElement = validation.focusedElement ?? lastFocusedElement;
+    currentUrl = validation.currentUrlAfterValidation || currentUrl;
     notes.push(`promptHash=${validation.expectedHash}`);
+    notes.push(`validationMethod=${validation.method}`);
     await writeJsonlLog(logPath, { step: lastStep, validation });
 
     if (args.dryRun || !args.submit) {
@@ -217,10 +231,34 @@ async function chooseChromeWindow(titleHint) {
   if (!windows.length) {
     throw new StepError('WINDOW_NOT_FOUND', 'select-window', 'No visible Chrome/Edge top-level window found.');
   }
-  const preferred = windows.find((window) => String(window.title || '').includes(titleHint))
-    || windows.find((window) => String(window.title || '').toLowerCase().includes('chatgpt'))
-    || windows[0];
-  return preferred;
+
+  const foreground = await getForegroundWindow().catch(() => null);
+  const foregroundHandle = foreground?.window?.handle || null;
+  const byHandle = new Map(windows.map((window) => [window.handle, window]));
+  if (foregroundHandle && byHandle.has(foregroundHandle)) {
+    const foregroundWindow = byHandle.get(foregroundHandle);
+    const foregroundUrl = await readCurrentUrl(foregroundWindow.handle).catch(() => '');
+    if (isChatGptUrl(foregroundUrl)) {
+      return foregroundWindow;
+    }
+  }
+
+  const titlePreferred = windows.find((window) => String(window.title || '').includes(titleHint))
+    || windows.find((window) => String(window.title || '').toLowerCase().includes('chatgpt'));
+  if (titlePreferred) {
+    return titlePreferred;
+  }
+
+  for (const window of windows) {
+    const url = await readCurrentUrl(window.handle).catch(() => '');
+    if (isChatGptUrl(url)) {
+      return window;
+    }
+  }
+
+  return foregroundHandle && byHandle.has(foregroundHandle)
+    ? byHandle.get(foregroundHandle)
+    : windows[0];
 }
 
 async function readCurrentUrl(handle) {
@@ -251,26 +289,35 @@ async function navigateToChatGpt(targetUrl, stepDelayMs) {
 async function focusPromptBox(handle, fallbackPoint, stepDelayMs) {
   let via = 'uia';
   let element = null;
+  let omniboxRejected = false;
+
   try {
     const result = await uiaQueryByNameRole({ handle }, { role: 'Edit', timeoutMs: 1200 });
     element = result.element;
-    const rect = element?.rect;
-    if (rect?.width > 0 && rect?.height > 0) {
-      await clickPoint({ x: rect.x + Math.floor(rect.width / 2), y: rect.y + Math.floor(rect.height / 2) });
-    } else {
+    if (isLikelyOmniboxElement(element)) {
+      omniboxRejected = true;
       via = 'calibrated-fallback';
       await clickPoint(fallbackPoint);
+    } else {
+      const rect = element?.rect;
+      if (rect?.width > 0 && rect?.height > 0) {
+        await clickPoint({ x: rect.x + Math.floor(rect.width / 2), y: rect.y + Math.floor(rect.height / 2) });
+      } else {
+        via = 'calibrated-fallback';
+        await clickPoint(fallbackPoint);
+      }
     }
   } catch {
     via = 'calibrated-fallback';
     await clickPoint(fallbackPoint);
   }
+
   await delay(stepDelayMs);
   const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
-  return { via, focusedElement, element };
+  return { via, focusedElement, element, omniboxRejected };
 }
 
-async function validatePromptInput(prompt, stepDelayMs) {
+async function validatePromptInput(handle, prompt, promptFocus, stepDelayMs) {
   const expectedHash = hashText(prompt);
   await sendKeys('a', ['ctrl']);
   await delay(stepDelayMs);
@@ -280,19 +327,48 @@ async function validatePromptInput(prompt, stepDelayMs) {
   const copied = String(clipboard.text || '');
   const actualHash = hashText(copied);
   const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
+  const currentUrlAfterValidation = await readCurrentUrl(handle);
+
   if (expectedHash !== actualHash) {
     throw new StepError('PROMPT_VALIDATION_FAILED', 'validate-prompt', 'Clipboard hash after Ctrl+A/C did not match the prepared prompt.', {
       expectedHash,
       actualHash
     });
   }
+
+  ensurePromptTargetLooksCredible({
+    promptFocus,
+    focusedElement,
+    currentUrlAfterValidation,
+    prompt,
+    actualHash
+  });
+
   return {
-    method: 'clipboard-hash',
+    method: 'clipboard-hash+url-sanity',
     expectedHash,
     actualHash,
     clipboardHash: actualHash,
-    focusedElement
+    focusedElement,
+    currentUrlAfterValidation
   };
+}
+
+function ensurePromptTargetLooksCredible({ promptFocus, focusedElement, currentUrlAfterValidation, prompt, actualHash }) {
+  if (isLikelyOmniboxElement(promptFocus?.element) || isLikelyOmniboxElement(focusedElement)) {
+    throw new StepError('PROMPT_TARGET_INVALID', 'validate-prompt', 'Focused prompt target still looks like the browser omnibox/address bar.', {
+      promptFocus: promptFocus?.element || null,
+      focusedElement: focusedElement || null
+    });
+  }
+
+  if (!isChatGptUrl(currentUrlAfterValidation)) {
+    throw new StepError('PROMPT_TARGET_INVALID', 'validate-prompt', 'URL changed away from ChatGPT during prompt validation; prompt was likely pasted into the omnibox instead of the composer.', {
+      currentUrlAfterValidation,
+      promptPreview: String(prompt).slice(0, 80),
+      actualHash
+    });
+  }
 }
 
 async function submitPrompt(handle, submitPoint, stepDelayMs) {
@@ -321,6 +397,29 @@ async function submitPrompt(handle, submitPoint, stepDelayMs) {
   return { method: 'calibrated-send-button' };
 }
 
+function isLikelyOmniboxElement(element) {
+  if (!element) return false;
+  const haystack = [
+    element.name,
+    element.role,
+    element.controlType,
+    element.automationId,
+    element.className
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return OMNIBOX_HINTS.some((hint) => haystack.includes(hint.toLowerCase()));
+}
+
 function hashText(value) {
   return crypto.createHash('sha256').update(String(value), 'utf8').digest('hex');
 }
+
+export const __desktopSubmitInternals = {
+  isLikelyOmniboxElement,
+  ensurePromptTargetLooksCredible,
+  isChatGptUrl,
+  hashText
+};

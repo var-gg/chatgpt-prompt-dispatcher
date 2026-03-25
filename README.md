@@ -42,71 +42,107 @@ Forbidden:
 - ChatGPT Plus fallback supported through a separate profile
 - Local browser session only
 
+## Discoverable vs Runnable
+
+**Discoverable** means OpenClaw can find the skill because a scanned directory contains a top-level `SKILL.md`.
+
+**Runnable** means the installed bundle also contains everything needed to execute:
+- `profiles/`
+- `adapters/`
+- `runtime/`
+- `bundle.manifest.json`
+- `skill.install.lock.json`
+
+This repo now materializes a self-contained bundle so the installed skill can be both discoverable and runnable.
+
+## browserProfileDir Policy
+
+- Never attach to the user's main Chrome profile.
+- Always use a dedicated automation profile.
+- On Windows live runs, if `--browser-profile-dir` is omitted, a dedicated automation profile is created automatically under:
+  - `%USERPROFILE%\.chatgpt-prompt-dispatcher\automation-profiles\<profileName>`
+- Browser channel preference:
+  1. `msedge`
+  2. `chrome`
+
+## First Login Procedure
+
+A fresh automation profile must be logged in manually once.
+
+1. Run a live or dry-run command with the target profile.
+2. The automation browser window opens.
+3. Log in to ChatGPT manually in that automation window.
+4. Wait until the prompt box is visible.
+5. Re-run the command if the first attempt timed out at `LOGIN_REQUIRED`.
+
+The tool waits for manual login, but it does not automate login.
+
+## Supported Scenarios
+
+### New Chat
+- default when no project is specified
+- opens ChatGPT
+- ensures login
+- starts a new chat
+- applies mode
+- fills prompt
+- submits
+
+### Project
+- used when `--project` is specified
+- enters the named project first
+- skips new-chat by default unless explicitly requested
+- applies mode
+- fills prompt
+- submits
+
+### Attachment
+- enters visible tools / `+` menu only
+- uses upload menu entry
+- uploads through visible UI + file input/file chooser path
+
+### Mode Selection
+Supported modes:
+- `auto`
+- `latest`
+- `instant`
+- `thinking`
+- `pro`
+
+Modes are resolved through profile candidates. If the requested mode is not available in the selected profile/UI, the command returns a receipt error with `MODE_SELECTION_FAILED`.
+
 ## Core Commands
 
 ```bash
 npm install
 npm test
 npm run pack-skill
+npm run register-openclaw
 npm run submit -- --prompt "안녕하세요" --profile ko-KR.windows.pro --dry-run
 npm run submit -- --prompt-file .\prompt.txt --project "Example Project" --mode thinking --attachment .\sample.txt --profile ko-KR.windows.pro --dry-run
-npm run install-local -- --mode symlink
 npm run install-local -- --mode copy --target .\.tmp\local-skill-install --profile ko-KR.windows.pro
 ```
 
-## Flow Summary
+## Dry-Run vs Live
 
-### New Chat Flow
+### Dry-Run
+- launches a real browser
+- navigates to ChatGPT
+- waits for manual login if needed
+- runs UI steps until just before actual submission
+- captures a real screenshot
+- returns a receipt JSON
+- does **not** click final submit
 
-Used when no project is specified.
+### Live
+- launches a real browser
+- navigates to ChatGPT
+- waits for manual login if needed
+- executes the full UI path
+- clicks submit
+- captures a screenshot and receipt afterward
 
-1. Launch persistent local browser profile.
-2. Open `https://chatgpt.com/`.
-3. Wait for manual login if needed.
-4. Start a new chat.
-5. Select mode if requested.
-6. Attach files if requested.
-7. Input prompt.
-8. Submit.
-
-### Project Flow
-
-Used when `--project` is specified.
-
-1. Launch persistent local browser profile.
-2. Open `https://chatgpt.com/`.
-3. Wait for manual login if needed.
-4. Enter the specified project.
-5. Select mode if requested.
-6. Attach files if requested.
-7. Input prompt.
-8. Submit.
-
-### Attachment Flow
-
-Attachments are limited to visible UI interaction only:
-- open tools/attachment menu
-- choose upload entry
-- submit selected local files
-
-No hidden upload endpoints or session extraction are used.
-
-## Dry Run
-
-Use `--dry-run` to stop before actual submission.
-
-Dry run returns:
-- submission receipt JSON
-- resolved mode/project notes
-- flow interpretation notes
-- screenshot/artifact path
-- structured log path
-
-Example:
-
-```bash
-npm run submit -- --prompt "테스트" --project "Example Project" --mode thinking --attachment .\README.md --profile ko-KR.windows.pro --dry-run
-```
+Both modes write JSONL logs and preserve the last screenshot.
 
 ## Testing Strategy
 
@@ -121,15 +157,33 @@ Covers:
 - profile interpretation
 - flow planning
 - receipt generation
-- smoke command gating
+- smoke gating
+- candidate ordering
 
 ### Live Smoke
 
+Live smoke remains opt-in and gated behind `LIVE_CHATGPT=1`.
+
+#### Scenario A — New Chat + Thinking + Prompt Only
+
 ```bash
-LIVE_CHATGPT=1 npm run smoke -- --prompt "live smoke" --profile ko-KR.windows.pro --dry-run
+LIVE_CHATGPT=1 npm run smoke -- A --profile ko-KR.windows.pro --browser-profile-dir .\.tmp\smoke-profile-a
 ```
 
-Live smoke is opt-in only. Without `LIVE_CHATGPT=1`, it exits with a skip message.
+#### Scenario B — Project + Auto/Pro + One Attachment
+
+```bash
+LIVE_CHATGPT=1 npm run smoke -- B --profile ko-KR.windows.pro --project "Example Project" --mode auto --browser-profile-dir .\.tmp\smoke-profile-b
+LIVE_CHATGPT=1 npm run smoke -- B --profile ko-KR.windows.pro --project "Example Project" --mode pro --browser-profile-dir .\.tmp\smoke-profile-b
+```
+
+If a live smoke fails, stdout includes:
+- full receipt JSON
+- `screenshotPath`
+- `failureArtifacts.logPath`
+- `failureArtifacts.lastStep`
+
+Without `LIVE_CHATGPT=1`, smoke exits with a skip message.
 
 ## Packaging and Installation
 
@@ -147,9 +201,7 @@ Outputs:
 
 ```bash
 npm run pack-skill
-npm run install-local -- --mode symlink
 npm run install-local -- --mode copy --target <path> --profile ko-KR.windows.pro
-npm run register-openclaw
 ```
 
 Install materializes a runnable bundle root containing:
@@ -162,47 +214,68 @@ Install materializes a runnable bundle root containing:
 - `bundle.manifest.json`
 - `skill.install.lock.json`
 
-Install state is tracked in `skill.install.lock.json`.
+### OpenClaw Registration
+
+```bash
+npm run register-openclaw
+```
+
+Default registration target:
+- `~/.openclaw/skills/chatgpt-web-submit`
+
+The installed OpenClaw adapter executes the installed bundle runtime entry:
+- `runtime/src/index.js`
 
 ## Logging and Failure Artifacts
 
-Runtime artifacts are written outside source control:
+Runtime artifacts are written under the active runtime directory:
 - `artifacts/logs/*.jsonl`
 - `artifacts/screenshots/*`
 
 Receipts include notes for:
 - `logPath`
 - `lastStep`
+- selector hits
+- browser profile usage
 
 ## Troubleshooting
 
-### The tool says login is required
-- Log in manually in the local browser session.
-- Re-run or continue only after ChatGPT Web is visibly ready.
+### `LOGIN_REQUIRED`
+- Log in manually in the opened automation browser window.
+- Re-run after the prompt box is visible.
+- Reuse the same automation profile directory.
 
-### A mode option is not found
-- Check whether the selected profile matches the active UI tier.
-- Try `ko-KR.windows.pro` first for Pro UI.
-- Update profile candidates if ChatGPT labels drift.
+### `MODE_SELECTION_FAILED`
+- Confirm the selected profile matches the actual UI tier.
+- `ko-KR.windows.pro` should be tried first on Pro UI.
+- Some modes may be absent in Plus or temporarily hidden by UI drift.
 
-### Project navigation fails
-- Verify the project name exactly.
-- Confirm the visible Projects entry exists in the current UI.
-- Add candidate labels/text/selectors to the relevant profile if needed.
+### Project selection fails
+- Confirm the project exists and the visible name matches exactly.
+- Update role/label/text/placeholder/selector candidates in the chosen profile.
 
-### Attachment menu differs
-- Update the tools-menu candidate list in the selected profile.
-- Keep changes in profile data rather than hard-coding selectors.
+### Attachment flow fails
+- Confirm the visible tools or `+` menu exists.
+- Update the upload-entry candidates in the profile.
+- The tool intentionally does not use hidden upload endpoints.
 
-### CI passes but live UI still fails
-- This is expected when UI labels drift.
-- Reproduce with `--dry-run`, inspect logs, update profile candidates, and re-test.
+### Installed bundle runs but repo changes do not apply
+- Re-run:
+  - `npm run pack-skill`
+  - `npm run register-openclaw`
+- Installed bundle runtime is separate from repo source.
+
+### CI passes but live UI fails
+- Expected when ChatGPT labels/layout drift.
+- Reproduce with dry-run first.
+- Inspect the receipt, screenshot, and JSONL log.
+- Update profile candidates instead of hard-coding one-off selectors.
 
 ## Current Status
 
-- Core CLI scaffold implemented
+- Self-contained OpenClaw bundle packaging implemented
+- Playwright persistent visible automation implemented
 - Profile-driven UI resolution implemented
 - Structured logging and failure receipts implemented
-- Portable skill packaging implemented
-- OpenClaw and MCP adapter scaffolds implemented
+- OpenClaw installed-bundle adapter execution verified
 - Response collection intentionally not implemented

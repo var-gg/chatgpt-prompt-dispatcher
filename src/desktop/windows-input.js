@@ -37,8 +37,10 @@ export async function getClipboardText() {
   return client().call('getClipboard', {}, { step: 'desktop-get-clipboard', timeoutMs: 5000 });
 }
 
+const SPECIAL_KEYS = new Set(['enter', 'v', 'c', 'l', 't', 'a', '0', 'tab', 'escape']);
+
 export async function sendKeys(keys, modifiers = []) {
-  if (typeof keys === 'string' && !['enter', 'v', 'c', 'l'].includes(keys.toLowerCase()) && modifiers.length === 0) {
+  if (typeof keys === 'string' && !SPECIAL_KEYS.has(keys.toLowerCase()) && modifiers.length === 0) {
     return client().call('sendKeys', { text: keys }, { step: 'desktop-send-keys', timeoutMs: 5000 });
   }
   return client().call('sendKeys', { key: keys, modifiers }, { step: 'desktop-send-keys', timeoutMs: 5000 });

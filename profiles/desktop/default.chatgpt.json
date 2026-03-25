@@ -13,8 +13,8 @@
   },
   "anchors": {
     "promptInput": {
-      "x": 0.5,
-      "y": 0.92,
+      "x": 0.49,
+      "y": 0.5,
       "accessible": {
         "name": "Message ChatGPT",
         "role": "ControlType.Edit",
@@ -22,8 +22,8 @@
       }
     },
     "submitButton": {
-      "x": 0.965,
-      "y": 0.92,
+      "x": 0.70,
+      "y": 0.5,
       "accessible": {
         "name": "Send",
         "role": "ControlType.Button",

@@ -351,9 +351,12 @@ function Invoke-Method($method, $params) {
         }
         switch -Regex ([string]$params.key) {
           '^enter$' { Send-KeyInput 0x0D; Send-KeyInput 0x0D $true }
+          '^tab$' { Send-KeyInput 0x09; Send-KeyInput 0x09 $true }
+          '^escape$' { Send-KeyInput 0x1B; Send-KeyInput 0x1B $true }
           '^v$' { Send-KeyInput 0x56; Send-KeyInput 0x56 $true }
           '^c$' { Send-KeyInput 0x43; Send-KeyInput 0x43 $true }
           '^l$' { Send-KeyInput 0x4C; Send-KeyInput 0x4C $true }
+          '^t$' { Send-KeyInput 0x54; Send-KeyInput 0x54 $true }
           '^a$' { Send-KeyInput 0x41; Send-KeyInput 0x41 $true }
           '^0$' { Send-KeyInput 0x30; Send-KeyInput 0x30 $true }
           default { throw (New-ErrorResult 'UNSUPPORTED_KEY' "Unsupported key: $($params.key)") }

@@ -122,21 +122,27 @@ export async function submitDesktopChatgpt(argv = []) {
     lastWindow = (await getWindowRect(selectedWindow.handle)).window;
     await writeJsonlLog(logPath, { step: lastStep, window: lastWindow });
 
-    lastStep = 'verify-url';
+    lastStep = 'open-fresh-tab';
+    await openFreshTab(args.stepDelayMs);
+    await writeJsonlLog(logPath, { step: lastStep });
+
+    lastStep = 'navigate-chatgpt';
+    await navigateToChatGpt(CHATGPT_URL, args.stepDelayMs);
+    await writeJsonlLog(logPath, { step: lastStep, targetUrl: CHATGPT_URL });
+
+    lastStep = 'verify-url-after-navigation';
     currentUrl = await readCurrentUrl(selectedWindow.handle);
     await writeJsonlLog(logPath, { step: lastStep, currentUrl });
-
     if (!isChatGptUrl(currentUrl)) {
-      lastStep = 'navigate-chatgpt';
-      await navigateToChatGpt(CHATGPT_URL, args.stepDelayMs);
-      await writeJsonlLog(logPath, { step: lastStep, targetUrl: CHATGPT_URL });
-      lastStep = 'verify-url-after-navigation';
-      currentUrl = await readCurrentUrl(selectedWindow.handle);
-      await writeJsonlLog(logPath, { step: lastStep, currentUrl });
-      if (!isChatGptUrl(currentUrl)) {
-        throw new StepError('URL_VALIDATION_FAILED', lastStep, `Expected ${CHATGPT_HOST} after navigation, got: ${currentUrl}`);
-      }
+      throw new StepError('URL_VALIDATION_FAILED', lastStep, `Expected ${CHATGPT_HOST} after navigation, got: ${currentUrl}`);
     }
+
+    lastStep = 'dismiss-interstitials';
+    const dismissal = await dismissInterferingUi(selectedWindow.handle, args.stepDelayMs);
+    if (dismissal?.acted) {
+      notes.push(`dismissedUi=${dismissal.method}`);
+    }
+    await writeJsonlLog(logPath, { step: lastStep, dismissal });
 
     lastStep = 'normalize-zoom';
     await sendKeys('0', ['ctrl']);
@@ -236,11 +242,7 @@ async function chooseChromeWindow(titleHint) {
   const foregroundHandle = foreground?.window?.handle || null;
   const byHandle = new Map(windows.map((window) => [window.handle, window]));
   if (foregroundHandle && byHandle.has(foregroundHandle)) {
-    const foregroundWindow = byHandle.get(foregroundHandle);
-    const foregroundUrl = await readCurrentUrl(foregroundWindow.handle).catch(() => '');
-    if (isChatGptUrl(foregroundUrl)) {
-      return foregroundWindow;
-    }
+    return byHandle.get(foregroundHandle);
   }
 
   const titlePreferred = windows.find((window) => String(window.title || '').includes(titleHint))
@@ -275,6 +277,11 @@ function isChatGptUrl(url) {
   }
 }
 
+async function openFreshTab(stepDelayMs) {
+  await sendKeys('t', ['ctrl']);
+  await delay(stepDelayMs * 2);
+}
+
 async function navigateToChatGpt(targetUrl, stepDelayMs) {
   await setClipboardText(targetUrl);
   await delay(stepDelayMs);
@@ -283,7 +290,33 @@ async function navigateToChatGpt(targetUrl, stepDelayMs) {
   await pasteClipboard();
   await delay(stepDelayMs);
   await pressEnter();
-  await delay(stepDelayMs * 2);
+  await delay(stepDelayMs * 6);
+}
+
+async function dismissInterferingUi(handle, stepDelayMs) {
+  const buttonNames = ['모두 허용', 'Allow all', 'Accept all', '확인'];
+  for (const name of buttonNames) {
+    try {
+      const button = await uiaQueryByNameRole({ handle }, { name, role: 'Button', timeoutMs: 600 });
+      const rect = button.element?.rect;
+      if (rect?.width > 0 && rect?.height > 0) {
+        await clickPoint({ x: rect.x + Math.floor(rect.width / 2), y: rect.y + Math.floor(rect.height / 2) });
+        await delay(stepDelayMs * 2);
+        return { acted: true, method: `button:${name}` };
+      }
+    } catch {
+      // try next label
+    }
+  }
+
+  try {
+    await sendKeys('escape');
+    await delay(stepDelayMs);
+  } catch {
+    // ignore; some dialogs do not respond to escape
+  }
+
+  return { acted: false, method: 'none' };
 }
 
 async function focusPromptBox(handle, fallbackPoint, stepDelayMs) {
@@ -296,7 +329,11 @@ async function focusPromptBox(handle, fallbackPoint, stepDelayMs) {
     element = result.element;
     if (isLikelyOmniboxElement(element)) {
       omniboxRejected = true;
-      via = 'calibrated-fallback';
+      via = 'keyboard-tab-then-click';
+      await sendKeys('tab');
+      await delay(stepDelayMs);
+      await sendKeys('tab');
+      await delay(stepDelayMs);
       await clickPoint(fallbackPoint);
     } else {
       const rect = element?.rect;

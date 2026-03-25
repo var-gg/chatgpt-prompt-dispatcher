@@ -2,15 +2,26 @@
   "name": "chatgpt-prompt-dispatcher",
   "version": "0.1.0",
   "description": "Local browser automation for dispatching prompts into a logged-in ChatGPT web session on Windows.",
-  "main": "index.js",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "chatgpt-prompt-dispatcher": "src/index.js"
+  },
   "scripts": {
-    "test": "echo \"No tests yet\""
+    "dev": "node src/dev.js",
+    "lint": "node src/lint.js",
+    "test": "node --test tests/*.test.js",
+    "smoke": "node src/index.js smoke",
+    "build": "node src/build.js",
+    "pack-skill": "node src/pack-skill.js",
+    "install-local": "node src/install-local.js"
   },
   "keywords": [
     "chatgpt",
     "browser-automation",
     "windows",
-    "openclaw"
+    "openclaw",
+    "skill"
   ],
   "author": "",
   "license": "MIT"

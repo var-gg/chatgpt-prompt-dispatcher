@@ -1,0 +1,17 @@
+{
+  "profileName": "default",
+  "browser": {
+    "channel": "chrome-user-session",
+    "platform": "windows",
+    "locale": "ko-KR"
+  },
+  "chatgpt": {
+    "mode": "new-chat",
+    "projectName": null,
+    "uiTier": "pro-first-plus-fallback"
+  },
+  "attachments": {
+    "enabled": true,
+    "strategy": "visible-menu-only"
+  }
+}

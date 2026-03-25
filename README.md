@@ -17,8 +17,26 @@ MVP for local ChatGPT web input automation on a logged-in browser session.
 - Automate login.
 - Extract, back up, or export cookies/account/session material.
 
+## Architecture
+
+- Repository root = source of truth.
+- `skill/` = portable install bundle.
+- Runtime state = separate from the repository and portable bundle.
+- Host adapters live under `adapters/` as thin wrappers around core logic.
+
+## Layout
+
+- `src/` core implementation and CLI scaffolding
+- `profiles/` sample runtime profiles
+- `tests/` automated smoke/test scaffolding
+- `docs/adr/` architecture decisions
+- `adapters/openclaw/` OpenClaw-specific wrapper notes
+- `adapters/mcp/` MCP-specific wrapper notes
+- `skill/` portable bundle root for installation/materialization
+
 ## Status
 
 - Repository scaffolded.
-- ADR 0001 added.
+- ADR 0001 and ADR 0002 added.
+- Portable skill bundle scaffolded under `skill/`.
 - MVP implementation pending.

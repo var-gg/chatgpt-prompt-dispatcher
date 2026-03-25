@@ -1,0 +1,17 @@
+{
+  "profileName": "project-example",
+  "browser": {
+    "channel": "chrome-user-session",
+    "platform": "windows",
+    "locale": "ko-KR"
+  },
+  "chatgpt": {
+    "mode": "project-chat",
+    "projectName": "Example Project",
+    "uiTier": "pro-first-plus-fallback"
+  },
+  "attachments": {
+    "enabled": true,
+    "strategy": "visible-menu-only"
+  }
+}

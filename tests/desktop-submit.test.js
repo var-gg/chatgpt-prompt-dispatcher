@@ -9,6 +9,7 @@ const {
   looksLikeComposerElement,
   looksLikePromptEcho,
   deriveSubmitProof,
+  hasVisibleSendStateTransition,
   hashText,
   normalizeAddressValue,
   isRectClose
@@ -117,6 +118,18 @@ test('ensurePromptTargetLooksCredible tolerates stale omnibox prompt echo when c
 test('looksLikePromptEcho detects non-url omnibox echoes of the prompt', () => {
   assert.equal(looksLikePromptEcho('desktop live proof 2026-03-25 19:25', 'desktop live proof 2026-03-25 19:25'), true);
   assert.equal(looksLikePromptEcho('https://chatgpt.com/', 'desktop live proof 2026-03-25 19:25'), false);
+});
+
+test('hasVisibleSendStateTransition requires a real idle-to-send UI change', () => {
+  assert.equal(hasVisibleSendStateTransition(
+    { sendable: false, stopVisible: false, submitSignature: '' },
+    { sendable: true, stopVisible: false, submitSignature: '{"name":"Send"}' }
+  ), true);
+
+  assert.equal(hasVisibleSendStateTransition(
+    { sendable: true, stopVisible: false, submitSignature: '{"name":"Send"}' },
+    { sendable: true, stopVisible: false, submitSignature: '{"name":"Send"}' }
+  ), false);
 });
 
 test('deriveSubmitProof prefers strong post-submit UI signals', () => {

@@ -146,9 +146,21 @@ Outputs:
 ### Local Install
 
 ```bash
+npm run pack-skill
 npm run install-local -- --mode symlink
 npm run install-local -- --mode copy --target <path> --profile ko-KR.windows.pro
+npm run register-openclaw
 ```
+
+Install materializes a runnable bundle root containing:
+- `SKILL.md`
+- `references/`
+- `scripts/`
+- `profiles/`
+- `adapters/`
+- `runtime/`
+- `bundle.manifest.json`
+- `skill.install.lock.json`
 
 Install state is tracked in `skill.install.lock.json`.
 

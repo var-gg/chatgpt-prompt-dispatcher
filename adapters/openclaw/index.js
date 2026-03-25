@@ -3,10 +3,12 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, '..', '..');
+const bundleRoot = path.resolve(__dirname, '..', '..');
+const runtimeEntry = path.join(bundleRoot, 'runtime', 'src', 'index.js');
+const runtimeCwd = path.join(bundleRoot, 'runtime');
 
 export async function invokeOpenClawSubmit(options = {}) {
-  const args = ['src/index.js', 'submit-chatgpt'];
+  const args = [runtimeEntry, 'submit-chatgpt'];
 
   pushOption(args, '--prompt', options.prompt);
   pushOption(args, '--prompt-file', options.promptFile);
@@ -26,7 +28,7 @@ export async function invokeOpenClawSubmit(options = {}) {
 function runNode(args) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, {
-      cwd: repoRoot,
+      cwd: runtimeCwd,
       stdio: ['ignore', 'pipe', 'pipe']
     });
 

@@ -1,8 +1,9 @@
 {
   "version": "0.1.0",
-  "commitSha": "ac6801d",
-  "profile": "ko-KR.windows.pro",
-  "installedPath": "A:\\projects\\openclaw-skills\\chatgpt-prompt-dispatcher\\.tmp\\local-skill-install",
+  "commitSha": "4a5b2d6",
+  "profile": "default",
+  "installedPath": "C:\\Users\\curioustore\\.openclaw\\skills\\chatgpt-web-submit",
   "installMode": "copy",
-  "installedAt": "2026-03-25T04:17:16.498Z"
+  "installedAt": "2026-03-25T05:43:48.308Z",
+  "runtimeEntry": "C:\\Users\\curioustore\\.openclaw\\skills\\chatgpt-web-submit\\runtime\\src\\index.js"
 }

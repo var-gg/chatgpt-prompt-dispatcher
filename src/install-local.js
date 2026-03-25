@@ -1,30 +1,20 @@
-import { cp, lstat, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { access, cp, lstat, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import path from 'node:path';
+import { bundleSkillRoot, defaultInstallTarget, expandHome, repoRoot, resolveBundleRuntimeEntry } from './bundle-layout.js';
 
 const execFileAsync = promisify(execFile);
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, '..');
-const defaultTarget = path.join(os.homedir(), '.openclaw', 'skills', 'chatgpt-web-submit');
 
 async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  const target = path.resolve(expandHome(options.target || defaultTarget));
-  const source = path.join(repoRoot, 'skill');
-  await mkdir(path.dirname(target), { recursive: true });
-  await rm(target, { recursive: true, force: true });
-
-  if (options.mode === 'symlink') {
-    const type = process.platform === 'win32' ? 'junction' : 'dir';
-    await symlink(source, target, type);
-  } else {
-    await cp(source, target, { recursive: true });
-  }
+  const target = path.resolve(expandHome(options.target || defaultInstallTarget));
+  await ensureBundleBuilt();
+  await materializeBundle(target, options.mode);
+  await installRuntimeDeps(target);
 
   const commitSha = await getCommitSha();
+  const runtimeEntry = resolveBundleRuntimeEntry(target);
   const packageJson = JSON.parse(await readFile(path.join(repoRoot, 'package.json'), 'utf8'));
   const lock = {
     version: packageJson.version,
@@ -32,7 +22,8 @@ async function main(argv = process.argv.slice(2)) {
     profile: options.profile,
     installedPath: target,
     installMode: options.mode,
-    installedAt: new Date().toISOString()
+    installedAt: new Date().toISOString(),
+    runtimeEntry
   };
 
   await writeFile(path.join(repoRoot, 'skill.install.lock.json'), JSON.stringify(lock, null, 2) + '\n');
@@ -45,12 +36,42 @@ async function main(argv = process.argv.slice(2)) {
     mode: options.mode,
     profile: options.profile,
     isSymlink: statInfo.isSymbolicLink(),
-    commitSha
+    commitSha,
+    runtimeEntry
   }, null, 2));
 }
 
+async function materializeBundle(target, mode) {
+  await mkdir(path.dirname(target), { recursive: true });
+  await rm(target, { recursive: true, force: true });
+
+  if (mode === 'symlink') {
+    const type = process.platform === 'win32' ? 'junction' : 'dir';
+    await symlink(bundleSkillRoot, target, type);
+    return;
+  }
+  await cp(bundleSkillRoot, target, { recursive: true });
+}
+
+async function ensureBundleBuilt() {
+  try {
+    await access(bundleSkillRoot);
+  } catch {
+    await execFileAsync(process.execPath, ['src/pack-skill.js'], { cwd: repoRoot });
+  }
+}
+
+async function installRuntimeDeps(target) {
+  const runtimeDir = path.join(target, 'runtime');
+  if (process.platform === 'win32') {
+    await execFileAsync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm install --omit=dev'], { cwd: runtimeDir });
+    return;
+  }
+  await execFileAsync('npm', ['install', '--omit=dev'], { cwd: runtimeDir });
+}
+
 function parseArgs(argv) {
-  const options = { mode: 'symlink', target: defaultTarget, profile: 'default' };
+  const options = { mode: 'copy', target: defaultInstallTarget, profile: 'default' };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === '--target') options.target = argv[++i];
@@ -62,13 +83,6 @@ function parseArgs(argv) {
     throw new Error(`Unsupported install mode: ${options.mode}`);
   }
   return options;
-}
-
-function expandHome(value) {
-  if (value.startsWith('~/') || value.startsWith('~\\')) {
-    return path.join(os.homedir(), value.slice(2));
-  }
-  return value;
 }
 
 async function getCommitSha() {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { resolveUiProfile, modeCandidates } from '../src/ui-profile.js';
+import { resolveUiProfile, modeCandidates, candidateSequence } from '../src/ui-profile.js';
 import { buildFlowPlan } from '../src/browser-flow.js';
 
 async function load(name) {
@@ -9,13 +9,25 @@ async function load(name) {
   return JSON.parse(raw);
 }
 
+test('candidateSequence prioritizes role then label then text then placeholder then selector', () => {
+  const candidates = candidateSequence({
+    roles: [{ role: 'button', name: '새 채팅' }],
+    labels: ['새 채팅'],
+    texts: ['새 채팅'],
+    placeholders: ['메시지'],
+    selectors: ['button']
+  });
+
+  assert.deepEqual(candidates.map((entry) => entry.kind), ['role', 'label', 'text', 'placeholder', 'selector']);
+});
+
 test('ko-KR.windows.pro profile resolves mode candidates in priority order', async () => {
   const profile = await load('ko-KR.windows.pro.json');
   const resolved = resolveUiProfile(profile, { mode: 'thinking' });
   const candidates = modeCandidates(resolved, 'thinking');
 
-  assert.equal(candidates.option[0].kind, 'label');
-  assert.equal(candidates.option[0].value, 'Thinking');
+  assert.equal(candidates.option[0].kind, 'role');
+  assert.equal(candidates.option[0].value.role, 'menuitem');
   assert.ok(candidates.entry.length > 0);
 });
 

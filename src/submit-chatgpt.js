@@ -38,7 +38,7 @@ export async function submitChatgpt(argv = []) {
       notes.push('browserProfileDir=profile-default');
     }
 
-    const automation = await createAutomationSession({ profile, args, screenshotPath, notes, flowPlan });
+    const automation = await createAutomationSession({ profile, args, screenshotPath, notes, flowPlan, logPath });
 
     try {
       lastStep = 'launch-browser';
@@ -137,9 +137,14 @@ async function ensureParentDir(filePath) {
   await mkdir(path.dirname(filePath), { recursive: true });
 }
 
-async function createAutomationSession({ profile, args, screenshotPath, notes, flowPlan }) {
+async function createAutomationSession({ profile, args, screenshotPath, notes, flowPlan, logPath }) {
   await ensureParentDir(screenshotPath);
   notes.push(`profileLocale=${profile.browser.locale || 'unknown'}`);
+  const trace = async (event) => {
+    if (logPath) {
+      await writeJsonlLog(logPath, event);
+    }
+  };
   if (process.env.SKIP_BROWSER_AUTOMATION === '1') {
     return {
       async launchPersistentBrowser() { notes.push('launchPersistentBrowser=skipped'); },
@@ -158,5 +163,5 @@ async function createAutomationSession({ profile, args, screenshotPath, notes, f
       async close() {}
     };
   }
-  return createPlaywrightAutomationSession({ profile, args, screenshotPath, notes, flowPlan, ensureParentDir });
+  return createPlaywrightAutomationSession({ profile, args, screenshotPath, notes, flowPlan, ensureParentDir, trace });
 }

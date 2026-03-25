@@ -16,8 +16,10 @@ export function resolveUiProfile(profile, args = {}) {
 
 export function candidateSequence(target = {}) {
   return [
+    ...normalizeRoleCandidates(target.roles),
     ...normalizeCandidates('label', target.labels),
     ...normalizeCandidates('text', target.texts),
+    ...normalizeCandidates('placeholder', target.placeholders),
     ...normalizeCandidates('selector', target.selectors)
   ];
 }
@@ -43,6 +45,14 @@ export function toolCandidates(resolvedUi, toolKey) {
 function normalizeCandidates(kind, values = []) {
   return (values || []).filter(Boolean).map((value, index) => ({
     kind,
+    value,
+    priority: index + 1
+  }));
+}
+
+function normalizeRoleCandidates(values = []) {
+  return (values || []).filter(Boolean).map((value, index) => ({
+    kind: 'role',
     value,
     priority: index + 1
   }));

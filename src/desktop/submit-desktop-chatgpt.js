@@ -37,6 +37,9 @@ const CHATGPT_HOST = 'chatgpt.com';
 const COMPOSER_FOCUS_SETTLE_MS = 220;
 const PASTE_KEY_DELAY_MS = 90;
 const POST_PASTE_SETTLE_MS = 320;
+const LONG_PROMPT_PASTE_SETTLE_MS = 900;
+const SELECT_ALL_SETTLE_MS = 250;
+const CLIPBOARD_COPY_SETTLE_MS = 400;
 const OMNIBOX_HINTS = [
   '주소창',
   'address',
@@ -585,13 +588,16 @@ async function waitForComposerReady(handle, stepDelayMs, options = {}) {
 async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
   const expectedHash = hashText(prompt);
   const beforeSubmitState = await sampleVisibleSubmitState(handle);
+  const coordinateFallbackPoint = pointFromElementRect(promptFocus?.focusedElement?.rect)
+    || pointFromElementRect(promptFocus?.element?.rect)
+    || null;
 
   try {
     const composerTarget = await refocusComposer(handle, promptFocus, stepDelayMs);
     await clickComposerCenter(composerTarget, pointFromElementRect(composerTarget?.rect));
     await settleAfterComposerFocus(stepDelayMs);
     const valueSetResult = await uiaSetFocusedValue(prompt);
-    await settleAfterPaste(stepDelayMs);
+    await settleAfterPaste(stepDelayMs, prompt);
     const directValueMatch = normalizeComposerText(valueSetResult?.text) === prompt;
     if (directValueMatch) {
       const visibleProof = await waitForVisibleSendState(handle, prompt, beforeSubmitState, stepDelayMs, 'uia-focus+value-set');
@@ -631,7 +637,7 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
     await setClipboardText(prompt);
     await delay(stepDelayMs);
     await pasteClipboard({ slow: true, keyDelayMs: PASTE_KEY_DELAY_MS });
-    await settleAfterPaste(stepDelayMs);
+    await settleAfterPaste(stepDelayMs, prompt);
     const clipboardProof = await waitForPromptPresence(handle, prompt, stepDelayMs, 'uia-focus+slow-clipboard-paste');
     if (clipboardProof.ok) {
       const visibleProof = await waitForVisibleSendState(handle, prompt, beforeSubmitState, stepDelayMs, 'uia-focus+slow-clipboard-paste');
@@ -653,7 +659,7 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
     await settleAfterComposerFocus(stepDelayMs);
     await clearComposer(stepDelayMs);
     await sendText(prompt);
-    await settleAfterPaste(stepDelayMs);
+    await settleAfterPaste(stepDelayMs, prompt);
     const typedProof = await waitForPromptPresence(handle, prompt, stepDelayMs, 'uia-focus+unicode-type');
     if (typedProof.ok) {
       const visibleProof = await waitForVisibleSendState(handle, prompt, beforeSubmitState, stepDelayMs, 'uia-focus+unicode-type');
@@ -669,7 +675,7 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
     // fall through to machine-specific coordinate proof path
   }
 
-  const coordinateProof = await insertPromptViaCoordinateProof(prompt, stepDelayMs);
+  const coordinateProof = await insertPromptViaCoordinateProof(handle, prompt, promptFocus, coordinateFallbackPoint, stepDelayMs);
   const visibleProof = await waitForVisibleSendState(handle, prompt, beforeSubmitState, stepDelayMs, coordinateProof.method);
   return mergePromptInsertionProof({
     baseMethod: coordinateProof.method,
@@ -737,35 +743,60 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
     };
   }
 
-  const verifiedProof = await waitForCondition({
-    step: 'validate-prompt',
-    attempts: 3,
-    delayMs: stepDelayMs,
-    action: async () => {
-      await focusWindow(handle).catch(() => {});
-      await refocusComposer(handle, promptFocus, stepDelayMs).catch(() => {});
-    },
-    verify: async () => {
-      const proof = await readComposerProof(handle);
-      ensurePromptTargetLooksCredible({
-        promptFocus,
-        focusedElement: proof.focusedElement,
-        currentUrlAfterValidation: CHATGPT_URL,
-        prompt,
-        actualHash: hashText(proof.text)
-      });
-      const promptPresent = proof.text.includes(prompt);
-      return {
-        ok: promptPresent,
-        proof: promptPresent ? 'promptPresentComposerCredible' : 'composerTextStillHydrating',
-        ...proof,
-        submitState: insertion?.afterSubmitState || insertion?.beforeSubmitState || null,
-        sendTransitionProven: Boolean(insertion?.visibleSendStateProven)
-      };
-    },
-    failureCode: 'PROMPT_VALIDATION_FAILED',
-    failureMessage: 'Prompt was not confirmed in the ChatGPT composer.'
-  });
+  let verifiedProof;
+  try {
+    verifiedProof = await waitForCondition({
+      step: 'validate-prompt',
+      attempts: 3,
+      delayMs: stepDelayMs,
+      action: async () => {
+        await focusWindow(handle).catch(() => {});
+        await refocusComposer(handle, promptFocus, stepDelayMs).catch(() => {});
+      },
+      verify: async () => {
+        const proof = await readComposerProof(handle);
+        ensurePromptTargetLooksCredible({
+          promptFocus,
+          focusedElement: proof.focusedElement,
+          currentUrlAfterValidation: CHATGPT_URL,
+          prompt,
+          actualHash: hashText(proof.text)
+        });
+        const promptPresent = proof.text.includes(prompt);
+        return {
+          ok: promptPresent,
+          proof: promptPresent ? 'promptPresentComposerCredible' : 'composerTextStillHydrating',
+          ...proof,
+          submitState: insertion?.afterSubmitState || insertion?.beforeSubmitState || null,
+          sendTransitionProven: Boolean(insertion?.visibleSendStateProven)
+        };
+      },
+      failureCode: 'PROMPT_VALIDATION_FAILED',
+      failureMessage: insertion?.proof === 'coordinateClipboardRoundtripUnconfirmed'
+        ? 'Prompt could not be confirmed after coordinate fallback. Recalibrate promptInput and retry.'
+        : 'Prompt was not confirmed in the ChatGPT composer.'
+    });
+  } catch (error) {
+    if (error instanceof StepError && error.code === 'PROMPT_VALIDATION_FAILED') {
+      const recovery = await recoverPromptWithSlowClipboardRoundtrip(handle, prompt, promptFocus, stepDelayMs).catch(() => null);
+      if (recovery?.ok) {
+        return {
+          method: `${insertion?.method || 'unknown'}+slow-clipboard-roundtrip-recovery`,
+          expectedHash,
+          actualHash: expectedHash,
+          clipboardHash: expectedHash,
+          focusedElement: recovery.focusedElement,
+          composerElement: recovery.composerElement,
+          proof: recovery.proof,
+          composerTextSample: prompt.slice(0, 200),
+          beforeSubmitState: insertion?.beforeSubmitState,
+          afterSubmitState: insertion?.afterSubmitState || insertion?.beforeSubmitState || null,
+          visibleSendStateProven: Boolean(insertion?.visibleSendStateProven)
+        };
+      }
+    }
+    throw error;
+  }
 
   return {
     method: `${insertion?.method || 'unknown'}+light-composer-present-proof`,
@@ -779,6 +810,36 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
     beforeSubmitState: insertion?.beforeSubmitState,
     afterSubmitState: verifiedProof.submitState,
     visibleSendStateProven: Boolean(verifiedProof.sendTransitionProven)
+  };
+}
+
+async function recoverPromptWithSlowClipboardRoundtrip(handle, prompt, promptFocus, stepDelayMs) {
+  const composerTarget = await refocusComposer(handle, promptFocus, stepDelayMs)
+    .catch(() => promptFocus?.focusedElement || promptFocus?.element || null);
+  if (!composerTarget) {
+    return { ok: false };
+  }
+
+  await focusWindow(handle).catch(() => {});
+  await clickComposerCenter(composerTarget, pointFromElementRect(composerTarget?.rect));
+  await settleAfterComposerFocus(stepDelayMs);
+  await setClipboardText(prompt);
+  await delay(stepDelayMs);
+  await pasteClipboard({ slow: true, keyDelayMs: PASTE_KEY_DELAY_MS });
+  await settleAfterPaste(stepDelayMs, prompt);
+  await sendKeys('a', ['ctrl']);
+  await settleAfterSelectAll(stepDelayMs);
+  await sendKeys('c', ['ctrl']);
+  await settleAfterCopy(stepDelayMs);
+  const clipboard = await getClipboardText();
+  const copied = normalizeComposerText(clipboard.text);
+
+  return {
+    ok: copied === prompt,
+    focusedElement: composerTarget,
+    composerElement: composerTarget,
+    proof: copied === prompt ? 'recoveredBySlowClipboardRoundtrip' : 'slowClipboardRoundtripStillUnconfirmed',
+    copied
   };
 }
 
@@ -830,8 +891,22 @@ async function settleAfterComposerFocus(stepDelayMs) {
   await delay(Math.max(stepDelayMs, COMPOSER_FOCUS_SETTLE_MS));
 }
 
-async function settleAfterPaste(stepDelayMs) {
-  await delay(Math.max(stepDelayMs * 2, POST_PASTE_SETTLE_MS));
+function isLongPrompt(prompt) {
+  const text = String(prompt || '');
+  return text.length > 800 || text.includes('\n');
+}
+
+async function settleAfterPaste(stepDelayMs, prompt = '') {
+  const minDelay = isLongPrompt(prompt) ? LONG_PROMPT_PASTE_SETTLE_MS : POST_PASTE_SETTLE_MS;
+  await delay(Math.max(stepDelayMs * 2, minDelay));
+}
+
+async function settleAfterSelectAll(stepDelayMs) {
+  await delay(Math.max(stepDelayMs, SELECT_ALL_SETTLE_MS));
+}
+
+async function settleAfterCopy(stepDelayMs) {
+  await delay(Math.max(stepDelayMs * 2, CLIPBOARD_COPY_SETTLE_MS));
 }
 
 async function clickComposerCenter(element, fallbackPoint) {
@@ -851,12 +926,23 @@ function pointFromElementRect(rect) {
   };
 }
 
+function looksLikeComposerPlaceholderText(text, element) {
+  const normalizedText = normalizeComposerText(text).toLowerCase();
+  const normalizedName = normalizeComposerText(element?.name).toLowerCase();
+  if (!normalizedText) return false;
+  return Boolean(normalizedName) && normalizedText === normalizedName;
+}
+
 async function readComposerProof(handle) {
   const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
 
   if (looksLikeComposerElement(focusedElement)) {
     const focusedComposer = await uiaReadFocusedText().catch(() => null);
-    if (focusedComposer?.element && looksLikeComposerElement(focusedComposer.element)) {
+    if (
+      focusedComposer?.element
+      && looksLikeComposerElement(focusedComposer.element)
+      && !looksLikeComposerPlaceholderText(focusedComposer.text, focusedComposer.element)
+    ) {
       return {
         element: focusedComposer.element,
         focusedElement: focusedComposer.element,
@@ -870,6 +956,9 @@ async function readComposerProof(handle) {
       automationId: 'prompt-textarea',
       timeoutMs: 1500
     });
+    if (looksLikeComposerPlaceholderText(composer?.text, composer?.element)) {
+      throw new StepError('PROMPT_TEXT_PLACEHOLDER', 'read-composer-proof', 'UIA text read resolved only the composer placeholder.');
+    }
     return {
       element: composer.element,
       focusedElement,
@@ -884,11 +973,11 @@ async function readComposerProof(handle) {
     const sentinel = `__codex_composer_probe_${crypto.randomUUID()}__`;
     await setClipboardText(sentinel).catch(() => {});
     await clickComposerCenter(focusedElement, pointFromElementRect(focusedElement?.rect)).catch(() => {});
-    await delay(120);
+    await delay(SELECT_ALL_SETTLE_MS);
     await sendKeys('a', ['ctrl']);
-    await delay(120);
+    await delay(SELECT_ALL_SETTLE_MS);
     await sendKeys('c', ['ctrl']);
-    await delay(180);
+    await delay(CLIPBOARD_COPY_SETTLE_MS);
     const clipboard = await getClipboardText();
     await setClipboardText(String(priorClipboard?.text || '')).catch(() => {});
     const copiedText = normalizeComposerText(clipboard.text);
@@ -901,41 +990,76 @@ async function readComposerProof(handle) {
   }
 }
 
-async function insertPromptViaCoordinateProof(prompt, stepDelayMs) {
+function buildCoordinateInsertionProof({ prompt, composerText, copiedText, composerElement = null, focusedElement = null }) {
+  const normalizedComposerText = normalizeComposerText(composerText);
+  const normalizedCopiedText = normalizeComposerText(copiedText);
+
+  if (normalizedComposerText.includes(prompt)) {
+    return {
+      method: 'coordinate-click+clipboard-paste+composer-proof',
+      actualHash: hashText(normalizedComposerText),
+      focusedElement,
+      composerElement,
+      proof: 'coordinateComposerProofContainsPrompt',
+      composerTextSample: normalizedComposerText.slice(0, 200)
+    };
+  }
+
+  if (normalizedCopiedText === prompt) {
+    return {
+      method: 'coordinate-click+clipboard-paste+clipboard-roundtrip',
+      actualHash: hashText(normalizedCopiedText),
+      focusedElement,
+      composerElement,
+      proof: 'coordinateClipboardRoundtripMatchedPrompt',
+      composerTextSample: normalizedCopiedText.slice(0, 200)
+    };
+  }
+
+  return {
+    method: 'coordinate-click+clipboard-paste+degraded-proof',
+    actualHash: hashText(normalizedCopiedText),
+    focusedElement,
+    composerElement,
+    proof: 'coordinateClipboardRoundtripUnconfirmed',
+    composerTextSample: String(normalizedComposerText || normalizedCopiedText).slice(0, 200)
+  };
+}
+
+async function insertPromptViaCoordinateProof(handle, prompt, promptFocus, fallbackPoint, stepDelayMs) {
   await delay(stepDelayMs * 2);
-  await clickPoint({ x: 806, y: 530 });
+  const composerTarget = await refocusComposer(handle, promptFocus, stepDelayMs)
+    .catch(() => promptFocus?.focusedElement || promptFocus?.element || null);
+  if (composerTarget || fallbackPoint) {
+    await clickComposerCenter(composerTarget, fallbackPoint);
+  } else {
+    throw new StepError('PROMPT_TARGET_INVALID', 'insert-prompt', 'Coordinate fallback could not resolve a credible prompt target.');
+  }
   await delay(stepDelayMs * 2);
   await sendKeys('a', ['ctrl']);
-  await delay(stepDelayMs);
+  await settleAfterSelectAll(stepDelayMs);
   await setClipboardText(prompt);
   await delay(stepDelayMs);
-  await pasteClipboard();
-  await delay(stepDelayMs * 2);
+  await pasteClipboard({ slow: true, keyDelayMs: PASTE_KEY_DELAY_MS });
+  await settleAfterPaste(stepDelayMs, prompt);
+  const composerProof = await readComposerProof(handle).catch(() => null);
   const sentinel = `__codex_coordinate_probe_${crypto.randomUUID()}__`;
   await setClipboardText(sentinel);
   await delay(stepDelayMs);
   await sendKeys('a', ['ctrl']);
-  await delay(stepDelayMs);
+  await settleAfterSelectAll(stepDelayMs);
   await sendKeys('c', ['ctrl']);
-  await delay(stepDelayMs * 2);
+  await settleAfterCopy(stepDelayMs);
   const clipboard = await getClipboardText();
-  const copied = normalizeComposerText(clipboard.text);
-  if (copied !== prompt) {
-    throw new StepError('PROMPT_VALIDATION_FAILED', 'insert-prompt', 'Machine-specific coordinate insertion path did not round-trip the prompt through clipboard selection.', {
-      expectedHash: hashText(prompt),
-      actualHash: hashText(copied),
-      copiedPreview: copied.slice(0, 200)
-    });
-  }
-  const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
-  return {
-    method: 'coordinate-click+clipboard-paste+clipboard-roundtrip',
-    actualHash: hashText(copied),
-    focusedElement,
-    composerElement: null,
-    proof: 'coordinateClipboardRoundtripMatchedPrompt',
-    composerTextSample: copied.slice(0, 200)
-  };
+  const focusedElement = composerProof?.focusedElement
+    || await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
+  return buildCoordinateInsertionProof({
+    prompt,
+    composerText: composerProof?.text || '',
+    copiedText: clipboard.text || '',
+    composerElement: composerProof?.element || null,
+    focusedElement: focusedElement || composerTarget || null
+  });
 }
 
 function normalizeComposerText(text) {
@@ -1129,6 +1253,7 @@ async function submitViaVisibleSendButton(handle, submitPoint, stepDelayMs) {
 async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, validatedInput = null) {
   const currentUrlAfterValidation = await readCurrentUrl(handle).catch(() => CHATGPT_URL);
   const validatedHashMatched = validatedInput?.actualHash === hashText(prompt);
+  const promptFocusLooksCredible = looksLikeComposerElement(promptFocus?.focusedElement) || looksLikeComposerElement(promptFocus?.element);
   return waitForCondition({
     step: 'submit-prompt-precheck',
     attempts: 5,
@@ -1145,7 +1270,8 @@ async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, val
       });
       const promptPresent = normalizeComposerText(proof.text).includes(prompt);
       const sendable = isSendableSubmitState(submitButton);
-      const validatedReady = validatedHashMatched && Boolean(submitButton);
+      const proofLooksCredible = looksLikeComposerElement(proof.focusedElement) || looksLikeComposerElement(proof.element);
+      const validatedReady = validatedHashMatched && (proofLooksCredible || promptFocusLooksCredible);
       const sample = {
         stage: 'before',
         prompt,
@@ -1161,7 +1287,7 @@ async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, val
         ok: promptPresent || validatedReady,
         proof: promptPresent
           ? (sendable ? 'composerContainsPromptAndSendable' : 'composerContainsPromptSubmitStateDegraded')
-          : (validatedReady ? 'validatedInputHashMatchedAndSubmitButtonReady' : 'composerMissingExpectedPrompt'),
+          : (validatedReady ? 'validatedInputHashMatchedAndComposerCredible' : 'composerMissingExpectedPrompt'),
         sample
       };
     },
@@ -1414,6 +1540,9 @@ export const __desktopSubmitInternals = {
   looksLikeComposerElement,
   isChatGptUrl,
   looksLikePromptEcho,
+  buildCoordinateInsertionProof,
+  looksLikeComposerPlaceholderText,
+  normalizeComposerText,
   deriveSubmitProof,
   hasVisibleSendStateTransition,
   buildSubmitAttemptOrder,

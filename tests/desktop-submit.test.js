@@ -8,6 +8,8 @@ const {
   ensurePromptTargetLooksCredible,
   looksLikeComposerElement,
   looksLikePromptEcho,
+  buildCoordinateInsertionProof,
+  looksLikeComposerPlaceholderText,
   deriveSubmitProof,
   hasVisibleSendStateTransition,
   buildSubmitAttemptOrder,
@@ -171,6 +173,44 @@ test('looksLikeStopButton distinguishes streaming stop state from send state', (
     name: '프롬프트 보내기',
     automationId: 'composer-submit-button',
     className: 'composer-submit-btn'
+  }), false);
+});
+
+test('buildCoordinateInsertionProof accepts composer proof even when clipboard roundtrip drifts', () => {
+  const result = buildCoordinateInsertionProof({
+    prompt: '2026년 4월 나스닥 전망에 대해 분석',
+    composerText: '2026년 4월 나스닥 전망에 대해 분석',
+    copiedText: '',
+    composerElement: { automationId: 'prompt-textarea' },
+    focusedElement: { automationId: 'prompt-textarea' }
+  });
+
+  assert.equal(result.method, 'coordinate-click+clipboard-paste+composer-proof');
+  assert.equal(result.proof, 'coordinateComposerProofContainsPrompt');
+  assert.equal(result.actualHash, hashText('2026년 4월 나스닥 전망에 대해 분석'));
+});
+
+test('buildCoordinateInsertionProof degrades instead of failing hard when coordinate roundtrip is unconfirmed', () => {
+  const result = buildCoordinateInsertionProof({
+    prompt: 'desktop install dry-run',
+    composerText: '',
+    copiedText: 'Message ChatGPT',
+    composerElement: { automationId: 'prompt-textarea' },
+    focusedElement: { automationId: 'prompt-textarea' }
+  });
+
+  assert.equal(result.method, 'coordinate-click+clipboard-paste+degraded-proof');
+  assert.equal(result.proof, 'coordinateClipboardRoundtripUnconfirmed');
+  assert.equal(result.actualHash, hashText('Message ChatGPT'));
+});
+
+test('looksLikeComposerPlaceholderText rejects composer labels as real prompt text', () => {
+  assert.equal(looksLikeComposerPlaceholderText('ChatGPT와 채팅', {
+    name: 'ChatGPT와 채팅'
+  }), true);
+
+  assert.equal(looksLikeComposerPlaceholderText('2026년 4월 나스닥 전망에 대해 분석', {
+    name: 'ChatGPT와 채팅'
   }), false);
 });
 

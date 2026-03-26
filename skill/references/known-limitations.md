@@ -6,4 +6,5 @@
 - The desktop-native path does not support project entry or attachments.
 - `submit-pro-chatgpt` always opens a fresh chat and always targets Pro.
 - ChatGPT UI labels drift over time; profile updates and calibration refreshes are expected.
+- If prompt insertion falls back to coordinates and later fails validation, treat it as desktop drift first: inspect or recalibrate `promptInput` before changing transports.
 - Live smoke and forward-testing are local/operator-driven. They are not a license to relax the no-scraping boundary.

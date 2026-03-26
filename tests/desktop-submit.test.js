@@ -305,6 +305,10 @@ test('conversation URL helpers distinguish ChatGPT home and dedicated conversati
     extractConversationUrlFromOcrText('chatgpt.com/c/69C4e978-Of8c-83aa-b960-c52f68f88897 some more OCR noise'),
     'https://chatgpt.com/c/69C4e978-0f8c-83aa-b960-c52f68f88897'
   );
+  assert.equal(
+    extractConversationUrlFromOcrText('chatgpt.com/c/69c4ed24-18f8-83ab-940b noise block -ee42518a9678 more noise'),
+    'https://chatgpt.com/c/69c4ed24-18f8-83ab-940b-ee42518a9678'
+  );
 });
 
 test('pickOpenedBrowserWindow only accepts a genuinely new top-level handle', () => {

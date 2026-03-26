@@ -2023,12 +2023,30 @@ function isChatGptConversationUrl(url) {
 }
 
 function extractConversationUrlFromOcrText(text) {
-  const match = String(text || '').match(/(?:https?:\/\/)?chatgpt\.com\/c\/[A-Za-z0-9-]+/i);
-  if (!match) {
+  const sourceText = String(text || '');
+  const matches = [...sourceText.matchAll(/(?:https?:\/\/)?chatgpt\.com\/c\/[A-Za-z0-9-]+/ig)];
+  if (!matches.length) {
     return '';
   }
-  const raw = match[0];
-  const normalized = raw.replace(/\/c\/([A-Za-z0-9-]+)/i, (_whole, id) => `/c/${String(id).replace(/[Oo]/g, '0')}`);
+  const raw = matches
+    .map((match) => match[0])
+    .sort((left, right) => right.length - left.length)[0];
+
+  let normalized = raw.replace(/\/c\/([A-Za-z0-9-]+)/i, (_whole, id) => `/c/${String(id).replace(/[Oo]/g, '0')}`);
+  const normalizedUrl = normalized.startsWith('http') ? normalized : `https://${normalized}`;
+  const id = extractChatGptConversationId(normalizedUrl);
+  if (id && id.length < 36) {
+    const rawIndex = sourceText.indexOf(raw);
+    if (rawIndex >= 0) {
+      const tailWindow = sourceText.slice(rawIndex + raw.length, rawIndex + raw.length + 160);
+      const tailMatches = [...tailWindow.matchAll(/-([A-Fa-f0-9]{12})/g)];
+      const tail = tailMatches.length ? tailMatches[tailMatches.length - 1][1] : '';
+      if (tail && !id.endsWith(tail)) {
+        normalized = normalized.replace(/\/c\/([A-Za-z0-9-]+)/i, (_whole, currentId) => `/c/${currentId}-${tail}`);
+      }
+    }
+  }
+
   return normalized.startsWith('http') ? normalized : `https://${normalized}`;
 }
 

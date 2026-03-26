@@ -17,6 +17,10 @@ The repo is **desktop-first**:
 - Paste and validate a prepared prompt.
 - Submit immediately and return a receipt JSON.
 
+Receipt semantics:
+- `submitted: true` means the prompt was strongly validated locally and a submit attempt was made.
+- It does not imply response scraping, reply retrieval, or transcript reading.
+
 ## What it does not do
 
 - read assistant responses

@@ -592,6 +592,23 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
     || pointFromElementRect(promptFocus?.element?.rect)
     || null;
 
+  if (isLongPrompt(prompt)) {
+    const slowClipboardRecovery = await recoverPromptWithSlowClipboardRoundtrip(handle, prompt, promptFocus, stepDelayMs).catch(() => null);
+    if (slowClipboardRecovery?.ok) {
+      return mergePromptInsertionProof({
+        baseMethod: 'uia-focus+slow-clipboard-roundtrip',
+        expectedHash,
+        promptProof: {
+          text: prompt,
+          element: slowClipboardRecovery.composerElement || promptFocus?.element || null,
+          focusedElement: slowClipboardRecovery.focusedElement || promptFocus?.focusedElement || null,
+          proof: slowClipboardRecovery.proof
+        },
+        beforeSubmitState
+      });
+    }
+  }
+
   try {
     const composerTarget = await refocusComposer(handle, promptFocus, stepDelayMs);
     await clickComposerCenter(composerTarget, pointFromElementRect(composerTarget?.rect));
@@ -1125,8 +1142,21 @@ async function submitPrompt(handle, submitPoint, stepDelayMs, prompt, promptFocu
     if (!method) {
       continue;
     }
-    after = await waitForSubmitEvidence(handle, prompt, before, stepDelayMs);
-    if (after?.ok) {
+    const fastEnterPath = shouldUseFastEnterSubmitPath(method, ready, before);
+    after = await waitForSubmitEvidence(handle, prompt, before, stepDelayMs, fastEnterPath ? 2 : 12);
+    if (after?.ok || fastEnterPath) {
+      if (!after?.ok && fastEnterPath) {
+        after = {
+          ...(after || {}),
+          ok: true,
+          proof: 'enterAttemptedAfterValidatedPrompt',
+          composerText: after?.composerText || '',
+          focusedElement: after?.focusedElement || before.focusedElement,
+          composerElement: after?.composerElement || before.composerElement,
+          submitButton: after?.submitButton || before.submitButton,
+          stopButton: after?.stopButton || null
+        };
+      }
       break;
     }
   }
@@ -1251,16 +1281,36 @@ async function submitViaVisibleSendButton(handle, submitPoint, stepDelayMs) {
 }
 
 async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, validatedInput = null) {
-  const currentUrlAfterValidation = await readCurrentUrl(handle).catch(() => CHATGPT_URL);
   const validatedHashMatched = validatedInput?.actualHash === hashText(prompt);
-  const promptFocusLooksCredible = looksLikeComposerElement(promptFocus?.focusedElement) || looksLikeComposerElement(promptFocus?.element);
+  const promptFocusLooksCredible = hasCredibleComposerFocus(promptFocus);
+
+  if (shouldTrustValidatedPromptForSubmit(validatedHashMatched, promptFocus)) {
+    return {
+      proof: 'validatedInputHashMatchedAndComposerCredible',
+      sample: {
+        stage: 'before',
+        prompt,
+        composerText: String(validatedInput?.composerTextSample || prompt).slice(0, 200),
+        composerElement: validatedInput?.composerElement || promptFocus?.element || null,
+        focusedElement: validatedInput?.focusedElement || promptFocus?.focusedElement || null,
+        submitButton: null,
+        stopButton: null,
+        submitButtonEnabled: false,
+        stopButtonEnabled: false
+      }
+    };
+  }
+
+  const currentUrlAfterValidation = await readCurrentUrl(handle).catch(() => CHATGPT_URL);
   return waitForCondition({
     step: 'submit-prompt-precheck',
     attempts: 5,
     delayMs: stepDelayMs,
     verify: async () => {
       const proof = await readComposerProof(handle);
-      const submitButton = await findSubmitButton(handle);
+      const proofLooksCredible = hasCredibleComposerFocus(proof);
+      const validatedReady = validatedHashMatched && (proofLooksCredible || promptFocusLooksCredible);
+      const submitButton = validatedReady ? null : await findSubmitButton(handle);
       ensurePromptTargetLooksCredible({
         promptFocus,
         focusedElement: proof.focusedElement,
@@ -1270,8 +1320,6 @@ async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, val
       });
       const promptPresent = normalizeComposerText(proof.text).includes(prompt);
       const sendable = isSendableSubmitState(submitButton);
-      const proofLooksCredible = looksLikeComposerElement(proof.focusedElement) || looksLikeComposerElement(proof.element);
-      const validatedReady = validatedHashMatched && (proofLooksCredible || promptFocusLooksCredible);
       const sample = {
         stage: 'before',
         prompt,
@@ -1296,10 +1344,10 @@ async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, val
   });
 }
 
-async function waitForSubmitEvidence(handle, prompt, before, stepDelayMs) {
+async function waitForSubmitEvidence(handle, prompt, before, stepDelayMs, attempts = 12) {
   return waitForCondition({
     step: 'submit-prompt',
-    attempts: 12,
+    attempts,
     delayMs: stepDelayMs * 2,
     verify: async () => {
       const sample = await collectSubmitEvidence(handle, prompt).catch(() => null);
@@ -1315,6 +1363,20 @@ async function waitForSubmitEvidence(handle, prompt, before, stepDelayMs) {
     },
     throwOnFailure: false
   });
+}
+
+function hasCredibleComposerFocus(proof) {
+  return looksLikeComposerElement(proof?.focusedElement) || looksLikeComposerElement(proof?.element);
+}
+
+function shouldTrustValidatedPromptForSubmit(validatedHashMatched, promptFocus, proof = null) {
+  return Boolean(validatedHashMatched) && (hasCredibleComposerFocus(proof) || hasCredibleComposerFocus(promptFocus));
+}
+
+function shouldUseFastEnterSubmitPath(method, ready, before) {
+  return method === 'enter'
+    && ready?.proof === 'validatedInputHashMatchedAndComposerCredible'
+    && !isSendableSubmitState(before?.submitButton);
 }
 
 function buildSubmitAttemptOrder(preferredMethod, submitButton) {
@@ -1543,6 +1605,10 @@ export const __desktopSubmitInternals = {
   buildCoordinateInsertionProof,
   looksLikeComposerPlaceholderText,
   normalizeComposerText,
+  isLongPrompt,
+  hasCredibleComposerFocus,
+  shouldTrustValidatedPromptForSubmit,
+  shouldUseFastEnterSubmitPath,
   deriveSubmitProof,
   hasVisibleSendStateTransition,
   buildSubmitAttemptOrder,

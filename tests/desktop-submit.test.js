@@ -10,9 +10,13 @@ const {
   looksLikePromptEcho,
   buildCoordinateInsertionProof,
   looksLikeComposerPlaceholderText,
+  isLongPrompt,
+  hasCredibleComposerFocus,
+  shouldTrustValidatedPromptForSubmit,
   deriveSubmitProof,
   hasVisibleSendStateTransition,
   buildSubmitAttemptOrder,
+  shouldUseFastEnterSubmitPath,
   looksLikeStopButton,
   hashText,
   normalizeAddressValue,
@@ -204,6 +208,12 @@ test('buildCoordinateInsertionProof degrades instead of failing hard when coordi
   assert.equal(result.actualHash, hashText('Message ChatGPT'));
 });
 
+test('isLongPrompt prefers the dedicated fast path for multiline or large prompts', () => {
+  assert.equal(isLongPrompt('짧은 요청'), false);
+  assert.equal(isLongPrompt('line1\nline2'), true);
+  assert.equal(isLongPrompt('x'.repeat(900)), true);
+});
+
 test('looksLikeComposerPlaceholderText rejects composer labels as real prompt text', () => {
   assert.equal(looksLikeComposerPlaceholderText('ChatGPT와 채팅', {
     name: 'ChatGPT와 채팅'
@@ -212,6 +222,33 @@ test('looksLikeComposerPlaceholderText rejects composer labels as real prompt te
   assert.equal(looksLikeComposerPlaceholderText('2026년 4월 나스닥 전망에 대해 분석', {
     name: 'ChatGPT와 채팅'
   }), false);
+});
+
+test('shouldTrustValidatedPromptForSubmit allows submit without button discovery once prompt hash is locked', () => {
+  const promptFocus = {
+    focusedElement: {
+      automationId: 'prompt-textarea',
+      className: 'ProseMirror'
+    }
+  };
+
+  assert.equal(hasCredibleComposerFocus(promptFocus), true);
+  assert.equal(shouldTrustValidatedPromptForSubmit(true, promptFocus), true);
+  assert.equal(shouldTrustValidatedPromptForSubmit(false, promptFocus), false);
+});
+
+test('shouldUseFastEnterSubmitPath enables short post-submit wait for validated enter fallback', () => {
+  assert.equal(shouldUseFastEnterSubmitPath(
+    'enter',
+    { proof: 'validatedInputHashMatchedAndComposerCredible' },
+    { submitButton: null }
+  ), true);
+
+  assert.equal(shouldUseFastEnterSubmitPath(
+    'click',
+    { proof: 'validatedInputHashMatchedAndComposerCredible' },
+    { submitButton: null }
+  ), false);
 });
 
 test('normalizeAddressValue canonicalizes chatgpt URLs for omnibox verification', () => {

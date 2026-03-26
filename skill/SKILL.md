@@ -51,6 +51,10 @@ node {baseDir}/scripts/submit-pro.js --prompt-file <temp-file>
    - `--no-submit`
 6. Return only the receipt JSON unless the user explicitly asks to also show the prompt that was sent.
 
+Receipt meaning:
+- `submitted: true` means the prompt was strongly validated locally and a submit attempt was made.
+- It does not mean the skill read, scraped, or summarized the ChatGPT reply.
+
 ## Prompt Construction
 
 - Keep the user's actual goal, constraints, and desired deliverable intact.

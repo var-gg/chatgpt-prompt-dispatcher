@@ -87,7 +87,7 @@ function printHelp() {
     '  profile:show <name>               Load and print a sample profile',
     '  smoke                             Run placeholder smoke check',
     '  submit-chatgpt [opts]             Submit a prompt through the default Windows desktop transport',
-    '  submit-pro-chatgpt [opts]         Open a fresh desktop chat, switch to Pro, and submit the prompt',
+    '  submit-pro-chatgpt [opts]         Open a dedicated fresh desktop window, switch to Pro, and submit with strict proof',
     '  submit-browser-chatgpt [opts]     Submit through the experimental browser transport (Playwright)',
     '  warmup-chatgpt [opts]             Open ChatGPT and hold the browser for manual login/captcha',
     '  submit-desktop-chatgpt [opts]     Explicit alias for the default Windows desktop transport',
@@ -96,7 +96,7 @@ function printHelp() {
     '',
     'Transport notes:',
     '  - submit-chatgpt defaults to the Windows desktop input dispatcher',
-    '  - submit-pro-chatgpt is a desktop-only Pro handoff shortcut',
+    '  - submit-pro-chatgpt defaults to --surface new-window and --proof-level strict',
     '  - pass --transport=browser or use submit-browser-chatgpt for the experimental browser path',
     '  - no command in this repo reads or scrapes assistant responses',
   ].join('\n'));

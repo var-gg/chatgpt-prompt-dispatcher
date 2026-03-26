@@ -25,6 +25,30 @@ export async function getWindowRect(handle) {
   return client().call('getWindowRect', { handle }, { step: 'desktop-get-window-rect', timeoutMs: 5000 });
 }
 
+export async function captureWindowScreenshot(handle, screenshotPath) {
+  return client().call(
+    'captureWindowScreenshot',
+    { handle, screenshotPath },
+    { step: 'desktop-capture-window-screenshot', timeoutMs: 10000 }
+  );
+}
+
+export async function ocrImageText(imagePath) {
+  return client().call(
+    'ocrImageText',
+    { imagePath },
+    { step: 'desktop-ocr-image-text', timeoutMs: 20000 }
+  );
+}
+
+export async function openBrowserWindow(handle, url) {
+  return client().call(
+    'launchBrowserWindow',
+    { handle, url },
+    { step: 'desktop-launch-browser-window', timeoutMs: 10000 }
+  );
+}
+
 export async function getForegroundWindow() {
   return client().call('getForegroundWindow', {}, { step: 'desktop-get-foreground-window', timeoutMs: 5000 });
 }
@@ -37,7 +61,7 @@ export async function getClipboardText() {
   return client().call('getClipboard', {}, { step: 'desktop-get-clipboard', timeoutMs: 12000 });
 }
 
-const SPECIAL_KEYS = new Set(['enter', 'v', 'c', 'l', 't', 'a', '0', 'tab', 'escape']);
+const SPECIAL_KEYS = new Set(['enter', 'end', 'right', 'v', 'c', 'l', 't', 'n', 'a', '0', 'tab', 'escape']);
 
 export async function sendKeys(keys, modifiers = [], options = {}) {
   if (typeof keys === 'string' && !SPECIAL_KEYS.has(keys.toLowerCase()) && modifiers.length === 0) {

@@ -28,7 +28,9 @@ Do not:
 
 - Assume the target is **ChatGPT Pro**
 - Assume the flow should **always open a fresh chat**
+- Assume the runtime should **open a dedicated fresh browser window** instead of reusing the old conversation window
 - Assume the flow should **submit immediately**
+- Assume the Pro wrapper should use **strict proof** by default
 - Use the desktop-backed runtime, not the experimental browser transport, unless you are diagnosing a desktop-only failure
 
 ## Execution Workflow
@@ -52,8 +54,9 @@ node {baseDir}/scripts/submit-pro.js --prompt-file <temp-file>
 6. Return only the receipt JSON unless the user explicitly asks to also show the prompt that was sent.
 
 Receipt meaning:
-- `submitted: true` means the prompt was strongly validated locally and a submit attempt was made.
+- `submitted: true` means the prompt was validated locally, the submit attempt ran in a dedicated target window, the run proved a ChatGPT conversation URL from the visible target window, and a screenshot artifact was captured.
 - It does not mean the skill read, scraped, or summarized the ChatGPT reply.
+- Successful Pro runs intentionally leave the successful ChatGPT window open for the user to inspect.
 
 ## Prompt Construction
 

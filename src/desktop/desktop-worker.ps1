@@ -7,8 +7,17 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+
+$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime]
+$null = [Windows.Storage.Streams.IRandomAccessStream, Windows.Storage.Streams, ContentType=WindowsRuntime]
+$null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType=WindowsRuntime]
+$null = [Windows.Graphics.Imaging.SoftwareBitmap, Windows.Foundation, ContentType=WindowsRuntime]
+$null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime]
+$null = [Windows.Media.Ocr.OcrResult, Windows.Foundation, ContentType=WindowsRuntime]
 
 $win32Source = @'
 using System;
@@ -340,6 +349,17 @@ function Read-UiaText($element) {
     }
   }
 
+  try {
+    if ($element.TryGetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern, [ref]$legacyPattern)) {
+      $legacyValue = [string]$legacyPattern.Current.Value
+      if (-not [string]::IsNullOrWhiteSpace($legacyValue)) {
+        return $legacyValue
+      }
+    }
+  } catch {
+    # ignore; fall back to element name
+  }
+
   return [string]$element.Current.Name
 }
 
@@ -372,6 +392,84 @@ function Get-ClipboardTextRobust([int]$attempts = 8) {
   return ''
 }
 
+function Save-WindowScreenshot($window, [string]$screenshotPath) {
+  if (-not $window) {
+    throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Window not found for screenshot capture.')
+  }
+  if ([string]::IsNullOrWhiteSpace($screenshotPath)) {
+    throw (New-ErrorResult 'SCREENSHOT_PATH_REQUIRED' 'Screenshot path is required.')
+  }
+
+  $rect = $window.rect
+  $width = [Math]::Max(0, [int]$rect.width)
+  $height = [Math]::Max(0, [int]$rect.height)
+  if ($width -le 0 -or $height -le 0) {
+    throw (New-ErrorResult 'WINDOW_RECT_INVALID' 'Window rect is invalid for screenshot capture.' @{ rect = $rect })
+  }
+
+  [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($screenshotPath)) | Out-Null
+  $bitmap = New-Object System.Drawing.Bitmap $width, $height
+  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+  try {
+    $graphics.CopyFromScreen([int]$rect.x, [int]$rect.y, 0, 0, [System.Drawing.Size]::new($width, $height))
+    $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
+  } finally {
+    if ($graphics) { $graphics.Dispose() }
+    if ($bitmap) { $bitmap.Dispose() }
+  }
+
+  return @{
+    screenshotPath = $screenshotPath
+    rect = $rect
+  }
+}
+
+function Invoke-WinRtAsTask([object]$operation, [type[]]$genericTypes = @()) {
+  $methods = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1
+  }
+
+  $method = $methods | Where-Object {
+    if ($genericTypes.Count -eq 0) { return -not $_.IsGenericMethodDefinition }
+    return $_.IsGenericMethodDefinition -and $_.GetGenericArguments().Count -eq $genericTypes.Count
+  } | Select-Object -First 1
+
+  if (-not $method) {
+    throw (New-ErrorResult 'WINRT_AS_TASK_UNAVAILABLE' 'Windows Runtime task conversion helper was not available.')
+  }
+
+  if ($genericTypes.Count -gt 0) {
+    $method = $method.MakeGenericMethod($genericTypes)
+  }
+
+  return $method.Invoke($null, @($operation))
+}
+
+function Invoke-OcrImageText([string]$imagePath) {
+  if ([string]::IsNullOrWhiteSpace($imagePath)) {
+    throw (New-ErrorResult 'OCR_IMAGE_PATH_REQUIRED' 'Image path is required for OCR.')
+  }
+  if (-not (Test-Path -LiteralPath $imagePath)) {
+    throw (New-ErrorResult 'OCR_IMAGE_NOT_FOUND' 'Image path for OCR was not found.' @{ imagePath = $imagePath })
+  }
+
+  $fileOp = [Windows.Storage.StorageFile]::GetFileFromPathAsync($imagePath)
+  $file = (Invoke-WinRtAsTask $fileOp @([Windows.Storage.StorageFile])).GetAwaiter().GetResult()
+  $streamOp = $file.OpenAsync([Windows.Storage.FileAccessMode]::Read)
+  $stream = (Invoke-WinRtAsTask $streamOp @([Windows.Storage.Streams.IRandomAccessStream])).GetAwaiter().GetResult()
+  $decoderOp = [Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)
+  $decoder = (Invoke-WinRtAsTask $decoderOp @([Windows.Graphics.Imaging.BitmapDecoder])).GetAwaiter().GetResult()
+  $bitmapOp = $decoder.GetSoftwareBitmapAsync()
+  $bitmap = (Invoke-WinRtAsTask $bitmapOp @([Windows.Graphics.Imaging.SoftwareBitmap])).GetAwaiter().GetResult()
+  $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+  if (-not $engine) {
+    throw (New-ErrorResult 'OCR_ENGINE_UNAVAILABLE' 'Windows OCR engine could not be created from user profile languages.')
+  }
+  $resultOp = $engine.RecognizeAsync($bitmap)
+  $result = (Invoke-WinRtAsTask $resultOp @([Windows.Media.Ocr.OcrResult])).GetAwaiter().GetResult()
+  return [string]$result.Text
+}
+
 function Invoke-Method($method, $params) {
   switch ($method) {
     'listChromeWindows' {
@@ -399,6 +497,33 @@ function Invoke-Method($method, $params) {
       $window = Resolve-Window $params
       if (-not $window) { throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Window not found.') }
       return @{ rect = $window.rect; window = $window }
+    }
+    'captureWindowScreenshot' {
+      $window = Resolve-Window $params
+      if (-not $window) { throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Window not found.') }
+      return (Save-WindowScreenshot $window ([string]$params.screenshotPath))
+    }
+    'ocrImageText' {
+      return @{ text = (Invoke-OcrImageText ([string]$params.imagePath)) }
+    }
+    'launchBrowserWindow' {
+      $window = Resolve-Window $params
+      if (-not $window) { throw (New-ErrorResult 'WINDOW_NOT_FOUND' 'Window not found.') }
+      try {
+        $proc = Get-Process -Id $window.processId -ErrorAction Stop
+      } catch {
+        throw (New-ErrorResult 'PROCESS_NOT_FOUND' 'Browser process not found for the selected window.' @{ handle = $window.handle; processId = $window.processId })
+      }
+      $processPath = [string]$proc.Path
+      if ([string]::IsNullOrWhiteSpace($processPath)) {
+        throw (New-ErrorResult 'PROCESS_PATH_UNAVAILABLE' 'Browser process path could not be resolved.' @{ handle = $window.handle; processId = $window.processId })
+      }
+      $arguments = @('--new-window')
+      if (-not [string]::IsNullOrWhiteSpace([string]$params.url)) {
+        $arguments += [string]$params.url
+      }
+      Start-Process -FilePath $processPath -ArgumentList $arguments | Out-Null
+      return @{ ok = $true; processPath = $processPath; arguments = @($arguments) }
     }
     'getForegroundWindow' {
       $window = Find-WindowByHandle([DesktopWorkerWin32]::GetForegroundWindow())
@@ -430,12 +555,15 @@ function Invoke-Method($method, $params) {
         }
         switch -Regex ([string]$params.key) {
           '^enter$' { Send-KeyInput 0x0D; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x0D $true }
+          '^end$' { Send-KeyInput 0x23; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x23 $true }
+          '^right$' { Send-KeyInput 0x27; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x27 $true }
           '^tab$' { Send-KeyInput 0x09; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x09 $true }
           '^escape$' { Send-KeyInput 0x1B; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x1B $true }
           '^v$' { Send-KeyInput 0x56; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x56 $true }
           '^c$' { Send-KeyInput 0x43; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x43 $true }
           '^l$' { Send-KeyInput 0x4C; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x4C $true }
           '^t$' { Send-KeyInput 0x54; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x54 $true }
+          '^n$' { Send-KeyInput 0x4E; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x4E $true }
           '^a$' { Send-KeyInput 0x41; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x41 $true }
           '^0$' { Send-KeyInput 0x30; if ($keyDelayMs -gt 0) { Start-Sleep -Milliseconds $keyDelayMs }; Send-KeyInput 0x30 $true }
           default { throw (New-ErrorResult 'UNSUPPORTED_KEY' "Unsupported key: $($params.key)") }
@@ -470,6 +598,8 @@ function Invoke-Method($method, $params) {
       try {
         if ($params.titleHint -or $params.handle) { [void](Invoke-Method 'focusWindow' $params) }
         [void](Invoke-Method 'sendKeys' @{ key = 'l'; modifiers = @('ctrl') })
+        Start-Sleep -Milliseconds 80
+        [void](Invoke-Method 'sendKeys' @{ key = 'a'; modifiers = @('ctrl') })
         Start-Sleep -Milliseconds 80
         [void](Invoke-Method 'sendKeys' @{ key = 'c'; modifiers = @('ctrl') })
         Start-Sleep -Milliseconds 80

@@ -30,6 +30,7 @@ Keep candidate order stable:
 5. selectors
 
 Desktop runtime reuses the same profile data for `new chat` and `Pro` mode selection where possible.
+The strict Pro path additionally depends on a stable composer candidate so it can prove that the dedicated fresh window is on ChatGPT home before submit.
 
 ## Desktop Calibration
 
@@ -40,6 +41,11 @@ For Pro handoff, these anchors matter:
 - `submitButton`
 - `newChatButton`
 - `modeButton`
+
+Notes:
+- `promptInput` and `modeButton` are the most important anchors for the strict default Pro path.
+- `newChatButton` still matters for same-window flows and fallback recovery, but a healthy dedicated fresh window can already satisfy the strict Pro fresh-surface contract before submit.
+- If strict receipts fail to capture proof, inspect whether the target window still reaches ChatGPT home and whether the final conversation URL changes to `/c/<id>`.
 
 Refresh calibration with:
 

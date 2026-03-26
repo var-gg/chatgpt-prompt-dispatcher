@@ -10,15 +10,15 @@ The repo is **desktop-first**:
 
 ## What it does
 
-- Focus a visible local ChatGPT window.
+- Borrow session state from a visible local ChatGPT window.
+- For `submit-pro-chatgpt`, open a dedicated fresh Chrome/Edge window and bind automation to that new top-level handle only.
 - Normalize navigation to `https://chatgpt.com/`.
-- Optionally open a fresh chat.
 - Optionally switch the visible UI to `Pro`.
 - Paste and validate a prepared prompt.
-- Submit immediately and return a receipt JSON.
+- Submit immediately and return a receipt JSON with strict proof metadata when requested.
 
 Receipt semantics:
-- `submitted: true` means the prompt was strongly validated locally and a submit attempt was made.
+- `submitted: true` on the strict Pro path means the prompt hash was validated, the submit attempt ran in the dedicated target window, the run proved a `https://chatgpt.com/c/<id>` conversation URL from the visible window, and a screenshot of that exact window was saved.
 - It does not imply response scraping, reply retrieval, or transcript reading.
 
 ## What it does not do
@@ -88,6 +88,12 @@ npm run submit-pro -- --prompt-file .\prompt.txt
 npm run submit-pro -- --prompt "이 요구사항을 구현하는 최선의 접근을 제안해줘" --dry-run
 ```
 
+Defaults for `submit-pro-chatgpt`:
+- `--mode pro`
+- `--new-chat`
+- `--surface new-window`
+- `--proof-level strict`
+
 Explicit desktop alias:
 
 ```bash
@@ -118,6 +124,11 @@ For Pro handoff, keep these anchors healthy:
 - `submitButton`
 - `newChatButton`
 - `modeButton`
+
+Strict Pro receipts also save:
+- `targetWindowHandle`
+- `conversationUrl`
+- `screenshotPath`
 
 ## Experimental browser transport
 

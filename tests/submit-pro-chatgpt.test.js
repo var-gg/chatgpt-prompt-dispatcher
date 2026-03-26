@@ -4,11 +4,14 @@ import { normalizeSubmitProArgs, submitProChatgpt } from '../src/submit-pro-chat
 
 process.env.SKIP_BROWSER_AUTOMATION = '1';
 
-test('normalizeSubmitProArgs injects pro mode and new chat defaults', () => {
+test('normalizeSubmitProArgs injects Pro, fresh window, and strict proof defaults', () => {
   assert.deepEqual(normalizeSubmitProArgs(['--prompt', 'hello']), [
     '--prompt', 'hello',
     '--mode', 'pro',
-    '--new-chat'
+    '--new-chat',
+    '--surface', 'new-window',
+    '--proof-level', 'strict',
+    '--submit-method', 'click'
   ]);
 });
 
@@ -28,6 +31,10 @@ test('submitProChatgpt returns a Pro dry-run receipt through desktop transport',
 
   assert.equal(receipt.submitted, false);
   assert.equal(receipt.modeResolved, 'pro');
+  assert.equal(receipt.surface, 'new-window');
+  assert.equal(receipt.proofLevel, 'strict');
   assert.ok(receipt.notes.includes('transport=desktop'));
   assert.ok(receipt.notes.includes('newChat=true'));
+  assert.ok(receipt.notes.includes('surface=new-window'));
+  assert.ok(receipt.notes.includes('proofLevel=strict'));
 });

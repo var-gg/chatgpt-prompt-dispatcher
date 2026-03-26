@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
+import { mkdir } from 'node:fs/promises';
 import { createFailureReceipt, createReceipt } from '../receipt.js';
 import { StepError, ERROR_CODES } from '../errors.js';
 import { parseDesktopSubmitArgs } from '../args.js';
@@ -9,6 +11,7 @@ import { loadCalibrationProfile } from './calibration-store.js';
 import { getStandardWindowBounds, resolveAnchorPoint } from './geometry.js';
 import { selectDesktopMode, startDesktopNewChat } from './chatgpt-desktop-actions.js';
 import {
+  captureWindowScreenshot,
   clickPoint,
   delay,
   focusWindow,
@@ -16,6 +19,9 @@ import {
   getForegroundWindow,
   getUrlViaOmnibox,
   getWindowRect,
+  listChromeWindows,
+  ocrImageText,
+  openBrowserWindow,
   pasteClipboard,
   pressEnter,
   resizeWindow,
@@ -40,6 +46,9 @@ const POST_PASTE_SETTLE_MS = 320;
 const LONG_PROMPT_PASTE_SETTLE_MS = 900;
 const SELECT_ALL_SETTLE_MS = 250;
 const CLIPBOARD_COPY_SETTLE_MS = 400;
+const NEW_WINDOW_DETECT_ATTEMPTS = 18;
+const STRICT_CONVERSATION_WAIT_ATTEMPTS = 20;
+const STRICT_OCR_WAIT_ATTEMPTS = 12;
 const OMNIBOX_HINTS = [
   '주소창',
   'address',
@@ -65,17 +74,25 @@ function enforceDesktopFirstConstraints(args) {
 export async function submitDesktopChatgpt(argv = []) {
   let lastStep = 'start';
   let currentUrl = CHATGPT_URL;
+  let conversationUrl = null;
   let lastWindow = null;
   let lastFocusedElement = null;
   let clipboardHash = null;
   let logPath = null;
+  let screenshotPath = null;
+  let targetWindowHandle = null;
   let modeResolved = 'auto';
+  let surface = 'same-window';
+  let proofLevel = 'fast';
   const notes = [];
 
   try {
     const args = await parseDesktopSubmitArgs(argv);
     enforceDesktopFirstConstraints(args);
+    const prompt = normalizePromptForSubmission(args.prompt);
     modeResolved = args.mode || 'auto';
+    surface = args.surface || 'same-window';
+    proofLevel = args.proofLevel || 'fast';
     logPath = defaultLogPath(`desktop-submit-${args.calibrationProfile}`);
 
     lastStep = 'load-ui-profile';
@@ -89,6 +106,7 @@ export async function submitDesktopChatgpt(argv = []) {
     const titleHint = args.windowTitle || calibration?.window?.titleHint || 'ChatGPT';
     const promptPoint = resolveAnchorPoint(calibration, 'promptInput', targetBounds);
     const submitPoint = resolveAnchorPoint(calibration, 'submitButton', targetBounds);
+    screenshotPath = resolveDesktopScreenshotPath(args.screenshotPath, args.calibrationProfile);
 
     notes.push('transport=desktop');
     notes.push('transportStatus=default');
@@ -98,19 +116,26 @@ export async function submitDesktopChatgpt(argv = []) {
     notes.push(`uiTier=${uiProfile.chatgpt?.uiTier || 'unknown'}`);
     notes.push(`modeResolved=${modeResolved}`);
     notes.push(`newChat=${args.newChat === true}`);
+    notes.push(`surface=${surface}`);
+    notes.push(`proofLevel=${proofLevel}`);
     notes.push(`calibrationProfile=${args.calibrationProfile}`);
     notes.push(`titleHint=${titleHint}`);
     notes.push(`targetBounds=${targetBounds.x},${targetBounds.y},${targetBounds.width},${targetBounds.height}`);
     notes.push(`promptPoint=${promptPoint.x},${promptPoint.y}`);
     notes.push(`submitPoint=${submitPoint.x},${submitPoint.y}`);
+    notes.push(`screenshotPath=${screenshotPath}`);
+    notes.push(`logPath=${logPath}`);
 
     await writeJsonlLog(logPath, {
       step: 'init',
       profile: args.profile,
       modeResolved,
+      surface,
+      proofLevel,
       newChat: args.newChat,
       dryRun: args.dryRun,
       submit: args.submit,
+      screenshotPath,
       calibrationProfile: args.calibrationProfile,
       titleHint,
       targetBounds
@@ -118,26 +143,49 @@ export async function submitDesktopChatgpt(argv = []) {
 
     if (process.env.SKIP_DESKTOP_AUTOMATION === '1' || process.env.SKIP_BROWSER_AUTOMATION === '1') {
       notes.push('desktopAutomation=skipped');
-      notes.push(`promptHash=${hashText(args.prompt)}`);
+      notes.push(`promptHash=${hashText(prompt)}`);
       return createReceipt({
         submitted: false,
         modeResolved,
         projectResolved: null,
         url: CHATGPT_URL,
+        surface,
+        proofLevel,
+        screenshotPath,
         notes
       });
     }
 
     lastStep = 'select-window';
     const windowSelection = await chooseVerifiedChatGptWindow(titleHint);
-    const selectedWindow = windowSelection.selectedWindow;
-    lastWindow = selectedWindow;
-    notes.push(`windowHandle=${selectedWindow.handle}`);
-    notes.push(`windowTitle=${selectedWindow.title}`);
+    const seedWindow = windowSelection.selectedWindow;
+    let selectedWindow = seedWindow;
+    lastWindow = seedWindow;
+    targetWindowHandle = seedWindow.handle;
+    notes.push(`seedWindowHandle=${seedWindow.handle}`);
+    notes.push(`seedWindowTitle=${seedWindow.title}`);
     if (windowSelection.evidence?.reasons?.length) {
-      notes.push(`targetEvidence=${windowSelection.evidence.reasons.join('+')}`);
+      notes.push(`seedTargetEvidence=${windowSelection.evidence.reasons.join('+')}`);
     }
-    await writeJsonlLog(logPath, { step: lastStep, selectedWindow, targetEvidence: windowSelection.evidence, candidates: windowSelection.candidates });
+    await writeJsonlLog(logPath, { step: lastStep, seedWindow, targetEvidence: windowSelection.evidence, candidates: windowSelection.candidates });
+
+    if (surface === 'new-window') {
+      lastStep = 'create-surface';
+      const surfaceResult = await createDedicatedWindowSurface({
+        seedWindow,
+        stepDelayMs: args.stepDelayMs
+      });
+      selectedWindow = surfaceResult.window;
+      lastWindow = selectedWindow;
+      targetWindowHandle = selectedWindow.handle;
+      notes.push(`surfaceWindowHandle=${selectedWindow.handle}`);
+      notes.push(`surfaceWindowTitle=${selectedWindow.title}`);
+      notes.push(`surfaceCreationProof=${surfaceResult.proof}`);
+      await writeJsonlLog(logPath, { step: lastStep, surfaceResult });
+    } else {
+      notes.push(`surfaceWindowHandle=${selectedWindow.handle}`);
+      notes.push(`surfaceWindowTitle=${selectedWindow.title}`);
+    }
 
     lastStep = 'focus-window';
     const focusWindowResult = await stabilizeWindowFocus(selectedWindow.handle, args.stepDelayMs);
@@ -167,6 +215,18 @@ export async function submitDesktopChatgpt(argv = []) {
       currentUrl = CHATGPT_URL;
     }
 
+    if (proofLevel === 'strict' && surface === 'new-window') {
+      lastStep = 'verify-fresh-surface';
+      const surfaceReady = await verifyStrictFreshSurface({
+        handle: selectedWindow.handle,
+        currentUrl,
+        stepDelayMs: args.stepDelayMs
+      });
+      currentUrl = surfaceReady.currentUrl || currentUrl;
+      notes.push(`surfaceReadyProof=${surfaceReady.proof}`);
+      await writeJsonlLog(logPath, { step: lastStep, surfaceReady });
+    }
+
     lastStep = 'dismiss-interstitials';
     const dismissal = await dismissInterferingUi(selectedWindow.handle, args.stepDelayMs);
     if (dismissal?.acted) {
@@ -180,17 +240,21 @@ export async function submitDesktopChatgpt(argv = []) {
     await writeJsonlLog(logPath, { step: lastStep });
 
     if (args.newChat) {
-      lastStep = 'start-new-chat';
-      const newChatResult = await startDesktopNewChat({
-        handle: selectedWindow.handle,
-        stepDelayMs: args.stepDelayMs,
-        calibration,
-        windowBounds: targetBounds,
-        profile: uiProfile
-      });
-      notes.push(`newChatProof=${newChatResult.proof}`);
-      notes.push(`newChatMethod=${newChatResult.method}`);
-      await writeJsonlLog(logPath, { step: lastStep, newChatResult });
+      if (surface === 'new-window' && proofLevel === 'strict' && isChatGptHomeUrl(currentUrl)) {
+        notes.push('newChatSkipped=freshWindowAlreadyAtHome');
+      } else {
+        lastStep = 'start-new-chat';
+        const newChatResult = await startDesktopNewChat({
+          handle: selectedWindow.handle,
+          stepDelayMs: args.stepDelayMs,
+          calibration,
+          windowBounds: targetBounds,
+          profile: uiProfile
+        });
+        notes.push(`newChatProof=${newChatResult.proof}`);
+        notes.push(`newChatMethod=${newChatResult.method}`);
+        await writeJsonlLog(logPath, { step: lastStep, newChatResult });
+      }
     }
 
     if (modeResolved !== 'auto') {
@@ -222,7 +286,7 @@ export async function submitDesktopChatgpt(argv = []) {
     await writeJsonlLog(logPath, { step: lastStep, promptFocus });
 
     lastStep = 'insert-prompt';
-    const insertion = await insertPrompt(selectedWindow.handle, args.prompt, promptFocus, args.stepDelayMs);
+    const insertion = await insertPrompt(selectedWindow.handle, prompt, promptFocus, args.stepDelayMs);
     clipboardHash = insertion.actualHash;
     lastFocusedElement = insertion.focusedElement ?? lastFocusedElement;
     notes.push(`promptHash=${insertion.expectedHash}`);
@@ -230,7 +294,7 @@ export async function submitDesktopChatgpt(argv = []) {
     await writeJsonlLog(logPath, { step: lastStep, insertion });
 
     lastStep = 'validate-prompt';
-    const validation = await validatePromptInput(selectedWindow.handle, args.prompt, promptFocus, insertion, args.stepDelayMs);
+    const validation = await validatePromptInput(selectedWindow.handle, prompt, promptFocus, insertion, args.stepDelayMs);
     clipboardHash = validation.clipboardHash;
     lastFocusedElement = validation.focusedElement ?? lastFocusedElement;
     notes.push(`validationMethod=${validation.method}`);
@@ -250,23 +314,60 @@ export async function submitDesktopChatgpt(argv = []) {
         modeResolved,
         projectResolved: null,
         url: currentUrl,
+        surface,
+        proofLevel,
+        targetWindowHandle,
+        conversationUrl,
+        screenshotPath: proofLevel === 'strict' ? screenshotPath : null,
         notes
       });
     }
 
     lastStep = 'submit-prompt';
-    const submitResult = await submitPrompt(selectedWindow.handle, submitPoint, args.stepDelayMs, args.prompt, promptFocus, args.submitMethod, validation);
+    const submitResult = await submitPrompt(
+      selectedWindow.handle,
+      submitPoint,
+      args.stepDelayMs,
+      prompt,
+      promptFocus,
+      args.submitMethod,
+      validation
+    );
     await writeJsonlLog(logPath, { step: lastStep, submitResult });
     notes.push(`submitMethod=${submitResult.method}`);
     if (submitResult.proof) {
       notes.push(`submitProof=${submitResult.proof}`);
     }
 
+    if (proofLevel === 'strict') {
+      lastStep = 'strict-submit-proof';
+      const strictProof = await collectStrictSubmitProof({
+        handle: selectedWindow.handle,
+        prompt,
+        promptHash: validation.expectedHash || hashText(prompt),
+        preSubmitUrl: currentUrl,
+        screenshotPath,
+        stepDelayMs: args.stepDelayMs
+      });
+      conversationUrl = strictProof.conversationUrl;
+      currentUrl = strictProof.conversationUrl;
+      screenshotPath = strictProof.screenshotPath;
+      notes.push(`strictProof=${strictProof.proof}`);
+      notes.push(`conversationUrl=${conversationUrl}`);
+      notes.push(`screenshotCaptured=${screenshotPath}`);
+      await writeJsonlLog(logPath, { step: lastStep, strictProof });
+    }
+
     return createReceipt({
       submitted: true,
       modeResolved,
       projectResolved: null,
-      url: currentUrl,
+      url: conversationUrl || currentUrl,
+      surface,
+      proofLevel,
+      targetWindowHandle,
+      conversationUrl,
+      screenshotPath: proofLevel === 'strict' ? screenshotPath : null,
       notes
     });
   } catch (error) {
@@ -292,14 +393,253 @@ export async function submitDesktopChatgpt(argv = []) {
     return createFailureReceipt({
       error: normalizedError,
       url: currentUrl || CHATGPT_URL,
+      surface,
+      proofLevel,
+      targetWindowHandle,
+      conversationUrl,
+      screenshotPath: proofLevel === 'strict' ? screenshotPath : null,
       notes: failureNotes
     });
   }
 }
 
-async function readCurrentUrl(handle) {
-  const result = await getUrlViaOmnibox({ handle });
-  return String(result.url || '').trim();
+function resolveDesktopScreenshotPath(explicitPath, calibrationProfile = 'default') {
+  if (explicitPath) {
+    return path.resolve(explicitPath);
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return path.resolve('artifacts', 'screenshots', `desktop-submit-${calibrationProfile}-${stamp}.png`);
+}
+
+async function createDedicatedWindowSurface({ seedWindow, stepDelayMs }) {
+  const beforeWindows = await listChromeWindows();
+  await stabilizeWindowFocus(seedWindow.handle, stepDelayMs).catch(() => {});
+  await delay(stepDelayMs);
+  await sendKeys('n', ['ctrl']);
+
+  const ctrlNResult = await waitForNewBrowserWindowFromBaseline(beforeWindows, {
+    step: 'create-surface',
+    stepDelayMs,
+    attempts: 6,
+    throwOnFailure: false
+  });
+
+  let result = ctrlNResult;
+  if (!result?.ok) {
+    await openBrowserWindow(seedWindow.handle, CHATGPT_URL);
+    result = await waitForNewBrowserWindowFromBaseline(beforeWindows, {
+      step: 'create-surface',
+      stepDelayMs,
+      attempts: NEW_WINDOW_DETECT_ATTEMPTS
+    });
+    result.proof = 'newTopLevelBrowserWindowDetectedAfterProcessLaunch';
+  }
+
+  await stabilizeWindowFocus(result.window.handle, stepDelayMs).catch(() => {});
+  return result;
+}
+
+async function waitForNewBrowserWindowFromBaseline(
+  beforeWindows,
+  {
+    step = 'create-surface',
+    stepDelayMs,
+    attempts = NEW_WINDOW_DETECT_ATTEMPTS,
+    throwOnFailure = true
+  } = {}
+) {
+  return waitForCondition({
+    step,
+    attempts,
+    delayMs: Math.max(stepDelayMs * 2, 250),
+    verify: async () => {
+      const afterWindows = await listChromeWindows();
+      const foreground = await getForegroundWindow().catch(() => null);
+      const window = pickOpenedBrowserWindow(beforeWindows, afterWindows, foreground?.window || null);
+      return {
+        ok: Boolean(window),
+        proof: window ? 'newTopLevelBrowserWindowDetected' : 'newTopLevelBrowserWindowPending',
+        window,
+        beforeCount: beforeWindows.length,
+        afterCount: afterWindows.length,
+        foreground: foreground?.window || null
+      };
+    },
+    throwOnFailure,
+    failureCode: ERROR_CODES.WINDOW_SURFACE_FAILED,
+    failureMessage: 'Dedicated new ChatGPT browser window was not detected.'
+  });
+}
+
+async function verifyStrictFreshSurface({ handle, currentUrl, stepDelayMs }) {
+  return waitForCondition({
+    step: 'verify-fresh-surface',
+    attempts: 8,
+    delayMs: Math.max(stepDelayMs * 2, 250),
+    verify: async () => {
+      const observedUrl = await readCurrentUrl(handle).catch(() => '');
+      const resolvedUrl = isChatGptUrl(observedUrl) ? observedUrl : currentUrl;
+      const composerElement = await queryComposerElement(handle, 1200).catch(() => null);
+      const ok = isChatGptHomeUrl(resolvedUrl) && looksLikeComposerElement(composerElement);
+      return {
+        ok,
+        proof: ok ? 'chatgptHomeUrlAndComposerReady' : 'chatgptHomeOrComposerPending',
+        currentUrl: resolvedUrl || currentUrl,
+        composerElement
+      };
+    },
+    failureCode: ERROR_CODES.WINDOW_SURFACE_FAILED,
+    failureMessage: 'Dedicated surface did not reach a fresh ChatGPT home composer state.'
+  });
+}
+
+async function collectStrictSubmitProof({
+  handle,
+  prompt,
+  promptHash,
+  preSubmitUrl,
+  screenshotPath,
+  stepDelayMs
+}) {
+  if (!promptHash || promptHash !== hashText(prompt)) {
+    throw new StepError(
+      ERROR_CODES.STRICT_PROOF_FAILED,
+      'strict-submit-proof',
+      'Strict proof requires a validated prompt hash before submit.'
+    );
+  }
+
+  const preSubmitConversationId = extractChatGptConversationId(preSubmitUrl);
+  const conversationProof = await waitForCondition({
+    step: 'strict-submit-proof',
+    attempts: STRICT_CONVERSATION_WAIT_ATTEMPTS,
+    delayMs: Math.max(stepDelayMs * 2, 300),
+    verify: async () => {
+      const observedUrl = await readCurrentUrl(handle).catch(() => '');
+      const conversationId = extractChatGptConversationId(observedUrl);
+      const ok = Boolean(conversationId) && conversationId !== preSubmitConversationId;
+      return {
+        ok,
+        proof: ok ? 'conversationUrlCreated' : 'conversationUrlPending',
+        currentUrl: observedUrl,
+        conversationId
+      };
+    },
+    throwOnFailure: false
+  });
+
+  const screenshotCapture = await captureStrictProofScreenshot(handle, screenshotPath, stepDelayMs);
+  const ocrProof = conversationProof.ok
+    ? null
+    : await waitForConversationUrlViaScreenshotOcr({
+      handle,
+      screenshotPath: screenshotCapture.screenshotPath,
+      preSubmitConversationId,
+      stepDelayMs
+    });
+
+  const conversationUrl = conversationProof.ok
+    ? conversationProof.currentUrl
+    : (ocrProof?.conversationUrl || '');
+  const conversationId = extractChatGptConversationId(conversationUrl);
+  if (!conversationId || conversationId === preSubmitConversationId) {
+    throw new StepError(
+      ERROR_CODES.STRICT_PROOF_FAILED,
+      'strict-submit-proof',
+      'Strict proof could not verify a new ChatGPT conversation URL after submit.',
+      {
+        preSubmitUrl,
+        conversationProof,
+        ocrProof,
+        screenshotPath: screenshotCapture.screenshotPath
+      }
+    );
+  }
+
+  return {
+    proof: conversationProof.ok
+      ? 'conversationUrlCreated+screenshotCaptured'
+      : 'conversationUrlRecoveredFromWindowOcr+screenshotCaptured',
+    conversationUrl,
+    conversationId,
+    screenshotPath: screenshotCapture.screenshotPath,
+    rect: screenshotCapture.rect || null,
+    ocrTextSample: String(ocrProof?.ocrText || '').slice(0, 240)
+  };
+}
+
+async function captureStrictProofScreenshot(handle, screenshotPath, stepDelayMs) {
+  await delay(stepDelayMs);
+  await mkdir(path.dirname(screenshotPath), { recursive: true });
+
+  try {
+    const screenshotResult = await captureWindowScreenshot(handle, screenshotPath);
+    return {
+      screenshotPath: path.resolve(screenshotResult?.screenshotPath || screenshotPath),
+      rect: screenshotResult?.rect || null
+    };
+  } catch (error) {
+    throw new StepError(
+      ERROR_CODES.SCREENSHOT_FAILED,
+      'capture-screenshot',
+      error?.message || 'Failed to capture the strict-proof target window screenshot.',
+      { handle, screenshotPath }
+    );
+  }
+}
+
+async function waitForConversationUrlViaScreenshotOcr({
+  handle,
+  screenshotPath,
+  preSubmitConversationId,
+  stepDelayMs
+}) {
+  return waitForCondition({
+    step: 'strict-submit-proof-ocr',
+    attempts: STRICT_OCR_WAIT_ATTEMPTS,
+    delayMs: Math.max(stepDelayMs * 8, 2000),
+    throwOnFailure: false,
+    verify: async () => {
+      const screenshotCapture = await captureStrictProofScreenshot(handle, screenshotPath, stepDelayMs);
+      const ocrResult = await ocrImageText(screenshotCapture.screenshotPath).catch(() => ({ text: '' }));
+      const ocrText = String(ocrResult?.text || '');
+      const conversationUrl = extractConversationUrlFromOcrText(ocrText);
+      const conversationId = extractChatGptConversationId(conversationUrl);
+      const ok = Boolean(conversationId) && conversationId !== preSubmitConversationId;
+      return {
+        ok,
+        proof: ok ? 'conversationUrlRecoveredFromWindowOcr' : 'conversationUrlStillUnavailableInWindowOcr',
+        conversationUrl,
+        conversationId,
+        ocrText,
+        screenshotPath: screenshotCapture.screenshotPath,
+        rect: screenshotCapture.rect || null
+      };
+    }
+  });
+}
+
+async function readCurrentUrl(handle, stepDelayMs = 150) {
+  const firstPass = await getUrlViaOmnibox({ handle }).catch(() => ({ url: '' }));
+  const firstUrl = String(firstPass.url || '').trim();
+  if (isChatGptUrl(firstUrl)) {
+    return firstUrl;
+  }
+
+  const omniboxFocus = await focusOmniboxAndVerify(handle, stepDelayMs).catch(() => null);
+  if (!omniboxFocus?.ok) {
+    return firstUrl;
+  }
+
+  const focusedText = await uiaReadFocusedText()
+    .then((result) => String(result?.text || '').trim())
+    .catch(() => '');
+  if (isChatGptUrl(focusedText)) {
+    return focusedText;
+  }
+
+  const secondPass = await getUrlViaOmnibox({ handle }).catch(() => ({ url: firstUrl }));
+  return String(secondPass.url || firstUrl || '').trim();
 }
 
 async function stabilizeWindowFocus(handle, stepDelayMs) {
@@ -807,8 +1147,8 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
           proof: recovery.proof,
           composerTextSample: prompt.slice(0, 200),
           beforeSubmitState: insertion?.beforeSubmitState,
-          afterSubmitState: insertion?.afterSubmitState || insertion?.beforeSubmitState || null,
-          visibleSendStateProven: Boolean(insertion?.visibleSendStateProven)
+          afterSubmitState: recovery.submitState || insertion?.afterSubmitState || insertion?.beforeSubmitState || null,
+          visibleSendStateProven: Boolean(recovery?.submitState?.sendable || insertion?.visibleSendStateProven)
         };
       }
     }
@@ -850,13 +1190,22 @@ async function recoverPromptWithSlowClipboardRoundtrip(handle, prompt, promptFoc
   await settleAfterCopy(stepDelayMs);
   const clipboard = await getClipboardText();
   const copied = normalizeComposerText(clipboard.text);
+  const submitState = await sampleVisibleSubmitState(handle).catch(() => null);
 
   return {
     ok: copied === prompt,
     focusedElement: composerTarget,
     composerElement: composerTarget,
     proof: copied === prompt ? 'recoveredBySlowClipboardRoundtrip' : 'slowClipboardRoundtripStillUnconfirmed',
-    copied
+    copied,
+    submitState: submitState ? {
+      submitButton: submitState.submitButton || null,
+      stopButton: submitState.stopButton || null,
+      sendable: Boolean(submitState.sendable),
+      stopVisible: Boolean(submitState.stopVisible),
+      submitSignature: submitState.submitSignature || '',
+      stopSignature: submitState.stopSignature || ''
+    } : null
   };
 }
 
@@ -930,6 +1279,18 @@ async function clickComposerCenter(element, fallbackPoint) {
   const rect = element?.rect;
   if (rect?.width > 0 && rect?.height > 0) {
     await clickPoint({ x: rect.x + (rect.width / 2), y: rect.y + Math.max(12, Math.min(rect.height / 2, rect.height - 4)) });
+    return;
+  }
+  await clickPoint(fallbackPoint);
+}
+
+async function clickComposerEnd(element, fallbackPoint) {
+  const rect = element?.rect;
+  if (rect?.width > 0 && rect?.height > 0) {
+    await clickPoint({
+      x: rect.x + Math.max(24, rect.width - 32),
+      y: rect.y + Math.max(12, Math.min(rect.height / 2, rect.height - 4))
+    });
     return;
   }
   await clickPoint(fallbackPoint);
@@ -1083,6 +1444,10 @@ function normalizeComposerText(text) {
   return String(text || '').replace(/\r/g, '').replace(/\uFFFC/g, '').trim();
 }
 
+function normalizePromptForSubmission(prompt) {
+  return String(prompt || '').replace(/\r/g, '').replace(/\uFFFC/g, '').trimEnd();
+}
+
 function ensurePromptTargetLooksCredible({ promptFocus, focusedElement, currentUrlAfterValidation, prompt, actualHash }) {
   const promptFocusLooksLikeComposer = looksLikeComposerElement(promptFocus?.element);
   const focusedLooksLikeComposer = looksLikeComposerElement(focusedElement);
@@ -1126,10 +1491,78 @@ function looksLikeComposerElement(element) {
 
 async function submitPrompt(handle, submitPoint, stepDelayMs, prompt, promptFocus, preferredMethod = 'click', validatedInput = null) {
   await focusWindow(handle).catch(() => {});
-  await refocusComposer(handle, promptFocus, stepDelayMs).catch(() => {});
+  const composerTarget = await refocusComposer(handle, promptFocus, stepDelayMs)
+    .catch(() => promptFocus?.focusedElement || promptFocus?.element || null);
+  await clickComposerEnd(
+    composerTarget,
+    pointFromElementRect(composerTarget?.rect)
+      || pointFromElementRect(promptFocus?.focusedElement?.rect)
+      || pointFromElementRect(promptFocus?.element?.rect)
+  ).catch(() => {});
   await settleAfterComposerFocus(stepDelayMs);
+  await sendKeys('end').catch(() => {});
+  await sendKeys('right').catch(() => {});
+  await delay(Math.max(80, Math.min(stepDelayMs, 180)));
   const ready = await verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, validatedInput);
-  const before = ready.sample;
+  let before = ready.sample;
+  await clickComposerEnd(
+    composerTarget,
+    pointFromElementRect(composerTarget?.rect)
+      || pointFromElementRect(before?.focusedElement?.rect)
+      || pointFromElementRect(before?.composerElement?.rect)
+      || pointFromElementRect(promptFocus?.focusedElement?.rect)
+      || pointFromElementRect(promptFocus?.element?.rect)
+  ).catch(() => {});
+  await delay(Math.max(80, Math.min(stepDelayMs, 180)));
+  await sendKeys('end').catch(() => {});
+  await sendKeys('right').catch(() => {});
+  await delay(Math.max(80, Math.min(stepDelayMs, 180)));
+  if (shouldReprimePromptBeforeSubmit(validatedInput, ready, before)) {
+    await clickComposerEnd(
+      composerTarget,
+      pointFromElementRect(composerTarget?.rect)
+        || pointFromElementRect(before?.focusedElement?.rect)
+        || pointFromElementRect(before?.composerElement?.rect)
+        || pointFromElementRect(promptFocus?.focusedElement?.rect)
+        || pointFromElementRect(promptFocus?.element?.rect)
+    ).catch(() => {});
+    await settleAfterComposerFocus(stepDelayMs);
+    await clearComposer(stepDelayMs);
+    await setClipboardText(prompt);
+    await delay(stepDelayMs);
+    await pasteClipboard({ slow: true, keyDelayMs: PASTE_KEY_DELAY_MS });
+    await settleAfterPaste(stepDelayMs, prompt);
+    await clickComposerEnd(
+      composerTarget,
+      pointFromElementRect(composerTarget?.rect)
+        || pointFromElementRect(before?.focusedElement?.rect)
+        || pointFromElementRect(before?.composerElement?.rect)
+        || pointFromElementRect(promptFocus?.focusedElement?.rect)
+        || pointFromElementRect(promptFocus?.element?.rect)
+    ).catch(() => {});
+    await delay(Math.max(80, Math.min(stepDelayMs, 180)));
+    await sendKeys('end').catch(() => {});
+    await sendKeys('right').catch(() => {});
+    await delay(Math.max(80, Math.min(stepDelayMs, 180)));
+    const reprimeProof = await readComposerProof(handle).catch(() => null);
+    const reprimeVisibleState = await sampleVisibleSubmitState(handle).catch(() => null);
+    if (
+      !normalizeComposerText(reprimeProof?.text).includes(prompt)
+      && !reprimeVisibleState?.sendable
+    ) {
+      throw new StepError('SUBMIT_PRECHECK_FAILED', 'submit-prompt-precheck', 'Prompt was not confirmed in the ChatGPT composer after re-priming before submit.', {
+        reprimeProof,
+        reprimeVisibleState
+      });
+    }
+    before = await collectSubmitEvidence(handle, prompt).catch(() => ({
+      ...before,
+      submitButton: reprimeVisibleState?.submitButton || before?.submitButton || null,
+      stopButton: reprimeVisibleState?.stopButton || before?.stopButton || null,
+      submitButtonEnabled: Boolean(reprimeVisibleState?.sendable) || before?.submitButtonEnabled || false,
+      stopButtonEnabled: Boolean(reprimeVisibleState?.stopVisible) || before?.stopButtonEnabled || false
+    }));
+  }
   const plannedMethods = buildSubmitAttemptOrder(preferredMethod, before.submitButton);
   let method = null;
   let after = null;
@@ -1285,6 +1718,7 @@ async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, val
   const promptFocusLooksCredible = hasCredibleComposerFocus(promptFocus);
 
   if (shouldTrustValidatedPromptForSubmit(validatedHashMatched, promptFocus)) {
+    const validatedSubmitState = validatedInput?.afterSubmitState || validatedInput?.beforeSubmitState || null;
     return {
       proof: 'validatedInputHashMatchedAndComposerCredible',
       sample: {
@@ -1293,10 +1727,10 @@ async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, val
         composerText: String(validatedInput?.composerTextSample || prompt).slice(0, 200),
         composerElement: validatedInput?.composerElement || promptFocus?.element || null,
         focusedElement: validatedInput?.focusedElement || promptFocus?.focusedElement || null,
-        submitButton: null,
-        stopButton: null,
-        submitButtonEnabled: false,
-        stopButtonEnabled: false
+        submitButton: validatedSubmitState?.submitButton || null,
+        stopButton: validatedSubmitState?.stopButton || null,
+        submitButtonEnabled: isElementEnabled(validatedSubmitState?.submitButton || null),
+        stopButtonEnabled: isElementEnabled(validatedSubmitState?.stopButton || null)
       }
     };
   }
@@ -1377,6 +1811,30 @@ function shouldUseFastEnterSubmitPath(method, ready, before) {
   return method === 'enter'
     && ready?.proof === 'validatedInputHashMatchedAndComposerCredible'
     && !isSendableSubmitState(before?.submitButton);
+}
+
+function shouldReprimePromptBeforeSubmit(validatedInput, ready, before) {
+  if (ready?.proof !== 'validatedInputHashMatchedAndComposerCredible') {
+    return false;
+  }
+
+  if (isSendableSubmitState(before?.submitButton)) {
+    return false;
+  }
+
+  const method = String(validatedInput?.method || '').toLowerCase();
+  const proof = String(validatedInput?.proof || '').toLowerCase();
+  const riskSignals = [
+    'clipboard',
+    'roundtrip',
+    'focus-safe-hash-proof',
+    'coordinate',
+    'hashmatchedafterfocusedpaste',
+    'prompthashmatchedafterfocusedpaste',
+    'recoveredbyslowclipboardroundtrip'
+  ];
+
+  return riskSignals.some((signal) => method.includes(signal) || proof.includes(signal));
 }
 
 function buildSubmitAttemptOrder(preferredMethod, submitButton) {
@@ -1535,6 +1993,63 @@ function normalizeAddressValue(value) {
   return String(value || '').trim().replace(/\/+$/, '/').toLowerCase();
 }
 
+function isChatGptHomeUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== CHATGPT_HOST && !parsed.hostname.endsWith(`.${CHATGPT_HOST}`)) {
+      return false;
+    }
+    return parsed.pathname === '/' || parsed.pathname === '';
+  } catch {
+    return false;
+  }
+}
+
+function extractChatGptConversationId(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== CHATGPT_HOST && !parsed.hostname.endsWith(`.${CHATGPT_HOST}`)) {
+      return '';
+    }
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    return segments[0] === 'c' && segments[1] ? segments[1] : '';
+  } catch {
+    return '';
+  }
+}
+
+function isChatGptConversationUrl(url) {
+  return Boolean(extractChatGptConversationId(url));
+}
+
+function extractConversationUrlFromOcrText(text) {
+  const match = String(text || '').match(/(?:https?:\/\/)?chatgpt\.com\/c\/[A-Za-z0-9-]+/i);
+  if (!match) {
+    return '';
+  }
+  const raw = match[0];
+  const normalized = raw.replace(/\/c\/([A-Za-z0-9-]+)/i, (_whole, id) => `/c/${String(id).replace(/[Oo]/g, '0')}`);
+  return normalized.startsWith('http') ? normalized : `https://${normalized}`;
+}
+
+function pickOpenedBrowserWindow(beforeWindows = [], afterWindows = [], foregroundWindow = null) {
+  const beforeHandles = new Set((beforeWindows || []).map((window) => String(window.handle)));
+  const openedWindows = (afterWindows || []).filter((window) => !beforeHandles.has(String(window.handle)));
+  if (!openedWindows.length) {
+    return null;
+  }
+
+  const foregroundHandle = String(foregroundWindow?.handle || '');
+  const foregroundMatch = openedWindows.find((window) => String(window.handle) === foregroundHandle);
+  if (foregroundMatch) {
+    return foregroundMatch;
+  }
+
+  return openedWindows
+    .slice()
+    .sort((left, right) => Number(right.handle) - Number(left.handle))[0] || null;
+}
+
 function isRectClose(actual = {}, expected = {}, tolerance = 3) {
   return ['x', 'y', 'width', 'height'].every((key) => Math.abs(Number(actual?.[key] || 0) - Number(expected?.[key] || 0)) <= tolerance);
 }
@@ -1605,9 +2120,11 @@ export const __desktopSubmitInternals = {
   buildCoordinateInsertionProof,
   looksLikeComposerPlaceholderText,
   normalizeComposerText,
+  normalizePromptForSubmission,
   isLongPrompt,
   hasCredibleComposerFocus,
   shouldTrustValidatedPromptForSubmit,
+  shouldReprimePromptBeforeSubmit,
   shouldUseFastEnterSubmitPath,
   deriveSubmitProof,
   hasVisibleSendStateTransition,
@@ -1615,5 +2132,11 @@ export const __desktopSubmitInternals = {
   looksLikeStopButton,
   hashText,
   normalizeAddressValue,
+  isChatGptHomeUrl,
+  extractChatGptConversationId,
+  isChatGptConversationUrl,
+  extractConversationUrlFromOcrText,
+  pickOpenedBrowserWindow,
+  resolveDesktopScreenshotPath,
   isRectClose
 };

@@ -78,6 +78,12 @@ Installed wrapper:
 node ~/.openclaw/skills/chatgpt-web-submit/scripts/submit-pro.js --prompt-file <prompt-file>
 ```
 
+`submit-pro.js` defaults to:
+- `--mode pro`
+- `--new-chat`
+- `--surface new-window`
+- `--proof-level strict`
+
 Diagnostics:
 - `inspect-desktop-chatgpt`
 - `calibrate-desktop-chatgpt`
@@ -102,5 +108,9 @@ node scripts/submit-pro.js --prompt-file <prompt-file> --dry-run
 4. Validate that the skill wording naturally supports both:
    - rough request -> final prompt synthesis -> submit
    - explicit prompt -> submit as-is
+5. On a successful live Pro run, verify that:
+   - the receipt contains `targetWindowHandle`, `conversationUrl`, and `screenshotPath`
+   - the saved screenshot matches the dedicated live ChatGPT window
+   - the successful window is left open for manual inspection
 
 If the skill feels awkward during real use, fix the skill text or wrapper first, then CLI help, then broader docs.

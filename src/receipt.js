@@ -3,6 +3,10 @@ export function createReceipt({
   modeResolved,
   projectResolved,
   url,
+  surface = null,
+  proofLevel = null,
+  targetWindowHandle = null,
+  conversationUrl = null,
   screenshotPath = null,
   notes = []
 }) {
@@ -12,6 +16,10 @@ export function createReceipt({
     modeResolved,
     projectResolved,
     url,
+    surface,
+    proofLevel,
+    targetWindowHandle,
+    conversationUrl,
     screenshotPath,
     notes
   };
@@ -21,6 +29,10 @@ export function createFailureReceipt({
   error,
   screenshotPath = null,
   url = null,
+  surface = null,
+  proofLevel = null,
+  targetWindowHandle = null,
+  conversationUrl = null,
   notes = []
 }) {
   return {
@@ -32,6 +44,10 @@ export function createFailureReceipt({
       message: error.message
     },
     url,
+    surface,
+    proofLevel,
+    targetWindowHandle,
+    conversationUrl,
     screenshotPath,
     notes
   };

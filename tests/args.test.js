@@ -32,6 +32,8 @@ test('parseDesktopSubmitArgs accepts desktop-specific flags', async () => {
     '--prompt', 'desktop hello',
     '--mode', 'pro',
     '--new-chat',
+    '--surface', 'new-window',
+    '--proof-level', 'strict',
     '--calibration-profile', 'default',
     '--window-title', 'ChatGPT',
     '--step-delay-ms', '250',
@@ -42,6 +44,8 @@ test('parseDesktopSubmitArgs accepts desktop-specific flags', async () => {
   assert.equal(result.prompt, 'desktop hello');
   assert.equal(result.mode, 'pro');
   assert.equal(result.newChat, true);
+  assert.equal(result.surface, 'new-window');
+  assert.equal(result.proofLevel, 'strict');
   assert.equal(result.calibrationProfile, 'default');
   assert.equal(result.windowTitle, 'ChatGPT');
   assert.equal(result.stepDelayMs, 250);

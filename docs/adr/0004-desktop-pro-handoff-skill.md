@@ -23,8 +23,10 @@ Adopt a dedicated **desktop Pro handoff** path.
 3. Make the Pro handoff path always:
    - use the desktop transport
    - start a fresh chat
+   - create a dedicated fresh top-level browser window from the visible logged-in ChatGPT session
    - target `Pro`
    - submit immediately unless explicitly told not to
+   - require strict proof before returning `submitted: true`
 4. Reuse browser UI profile candidates plus desktop calibration anchors for `new chat` and `Pro` mode selection.
 5. Keep OpenClaw integration repo-local and model-invoked instead of introducing a new OpenClaw core dispatch hook.
 6. Treat self-hosted forward-testing as part of the product:
@@ -37,4 +39,6 @@ Adopt a dedicated **desktop Pro handoff** path.
 - The skill now optimizes for a specific high-reasoning handoff workflow instead of being only a generic prompt submitter.
 - The desktop path still does not expand into response scraping, login automation, project handling, or attachment support.
 - `modeResolved` now represents the actual requested mode (`auto` or `pro`) instead of a transport label.
+- Strict Pro receipts now carry `surface`, `proofLevel`, `targetWindowHandle`, `conversationUrl`, and `screenshotPath`.
+- The success contract is intentionally narrower: `submitted: true` on the strict path now requires a new conversation URL proof plus a saved screenshot of the exact target window. When omnibox reads drift, the implementation is allowed to recover that proof from OCR on the visible target-window screenshot.
 - Skill packaging must preserve `agents/openai.yaml` and the dedicated `submit-pro` wrapper.

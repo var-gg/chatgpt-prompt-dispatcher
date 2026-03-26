@@ -10,9 +10,11 @@ const {
   looksLikePromptEcho,
   buildCoordinateInsertionProof,
   looksLikeComposerPlaceholderText,
+  normalizePromptForSubmission,
   isLongPrompt,
   hasCredibleComposerFocus,
   shouldTrustValidatedPromptForSubmit,
+  shouldReprimePromptBeforeSubmit,
   deriveSubmitProof,
   hasVisibleSendStateTransition,
   buildSubmitAttemptOrder,
@@ -20,6 +22,12 @@ const {
   looksLikeStopButton,
   hashText,
   normalizeAddressValue,
+  isChatGptHomeUrl,
+  extractChatGptConversationId,
+  isChatGptConversationUrl,
+  extractConversationUrlFromOcrText,
+  pickOpenedBrowserWindow,
+  resolveDesktopScreenshotPath,
   isRectClose
 } = __desktopSubmitInternals;
 
@@ -224,6 +232,13 @@ test('looksLikeComposerPlaceholderText rejects composer labels as real prompt te
   }), false);
 });
 
+test('normalizePromptForSubmission trims trailing file newline without stripping leading intent', () => {
+  assert.equal(
+    normalizePromptForSubmission('  line1\nline2\r\n'),
+    '  line1\nline2'
+  );
+});
+
 test('shouldTrustValidatedPromptForSubmit allows submit without button discovery once prompt hash is locked', () => {
   const promptFocus = {
     focusedElement: {
@@ -235,6 +250,26 @@ test('shouldTrustValidatedPromptForSubmit allows submit without button discovery
   assert.equal(hasCredibleComposerFocus(promptFocus), true);
   assert.equal(shouldTrustValidatedPromptForSubmit(true, promptFocus), true);
   assert.equal(shouldTrustValidatedPromptForSubmit(false, promptFocus), false);
+});
+
+test('shouldReprimePromptBeforeSubmit forces a fresh paste after clipboard-based validation', () => {
+  assert.equal(shouldReprimePromptBeforeSubmit(
+    {
+      method: 'uia-focus+slow-clipboard-paste+slow-clipboard-roundtrip-recovery',
+      proof: 'recoveredBySlowClipboardRoundtrip'
+    },
+    { proof: 'validatedInputHashMatchedAndComposerCredible' },
+    { submitButton: null }
+  ), true);
+
+  assert.equal(shouldReprimePromptBeforeSubmit(
+    {
+      method: 'uia-focus+value-set+light-composer-present-proof',
+      proof: 'promptPresentComposerCredible'
+    },
+    { proof: 'validatedInputHashMatchedAndComposerCredible' },
+    { submitButton: { name: 'Send', isEnabled: true } }
+  ), false);
 });
 
 test('shouldUseFastEnterSubmitPath enables short post-submit wait for validated enter fallback', () => {
@@ -255,6 +290,49 @@ test('normalizeAddressValue canonicalizes chatgpt URLs for omnibox verification'
   assert.equal(normalizeAddressValue('https://chatgpt.com'), normalizeAddressValue('https://chatgpt.com'));
   assert.equal(normalizeAddressValue('HTTPS://CHATGPT.COM///'), normalizeAddressValue('https://chatgpt.com/'));
   assert.equal(normalizeAddressValue(' https://chatgpt.com/c/abc/ '), normalizeAddressValue('https://chatgpt.com/c/abc/'));
+});
+
+test('conversation URL helpers distinguish ChatGPT home and dedicated conversations', () => {
+  assert.equal(isChatGptHomeUrl('https://chatgpt.com/'), true);
+  assert.equal(isChatGptHomeUrl('https://chatgpt.com/?model=auto'), true);
+  assert.equal(isChatGptHomeUrl('https://chatgpt.com/c/abc123'), false);
+
+  assert.equal(extractChatGptConversationId('https://chatgpt.com/c/abc123'), 'abc123');
+  assert.equal(extractChatGptConversationId('https://chatgpt.com/'), '');
+  assert.equal(isChatGptConversationUrl('https://chatgpt.com/c/abc123'), true);
+  assert.equal(isChatGptConversationUrl('https://chatgpt.com/'), false);
+  assert.equal(
+    extractConversationUrlFromOcrText('chatgpt.com/c/69C4e978-Of8c-83aa-b960-c52f68f88897 some more OCR noise'),
+    'https://chatgpt.com/c/69C4e978-0f8c-83aa-b960-c52f68f88897'
+  );
+});
+
+test('pickOpenedBrowserWindow only accepts a genuinely new top-level handle', () => {
+  const before = [
+    { handle: '101', title: 'ChatGPT - Chrome' },
+    { handle: '202', title: 'Other - Chrome' }
+  ];
+  const after = [
+    ...before,
+    { handle: '303', title: 'New Tab - Chrome' }
+  ];
+
+  assert.deepEqual(
+    pickOpenedBrowserWindow(before, after, { handle: '303', title: 'New Tab - Chrome' }),
+    { handle: '303', title: 'New Tab - Chrome' }
+  );
+  assert.equal(pickOpenedBrowserWindow(before, before, { handle: '101' }), null);
+});
+
+test('resolveDesktopScreenshotPath creates deterministic artifact paths when none are provided', () => {
+  const explicit = resolveDesktopScreenshotPath('artifacts/custom-shot.png', 'default');
+  assert.ok(explicit.endsWith('artifacts\\custom-shot.png') || explicit.endsWith('artifacts/custom-shot.png'));
+
+  const generated = resolveDesktopScreenshotPath(null, 'default');
+  assert.ok(generated.includes('artifacts'));
+  assert.ok(generated.includes('screenshots'));
+  assert.ok(generated.includes('desktop-submit-default-'));
+  assert.ok(generated.endsWith('.png'));
 });
 
 test('isRectClose tolerates small window settling drift only', () => {

@@ -17,6 +17,8 @@ function parseCommonArgs(argv = [], options = {}) {
     newChat: undefined,
     profile: 'default',
     mode: 'auto',
+    surface: 'same-window',
+    proofLevel: 'fast',
     holdOpenMs: 0,
     calibrationProfile: 'default',
     stepDelayMs: 150,
@@ -38,6 +40,14 @@ function parseCommonArgs(argv = [], options = {}) {
         break;
       case '--mode':
         parsed.mode = consumeValue(argv, i, token);
+        i += 1;
+        break;
+      case '--surface':
+        parsed.surface = consumeValue(argv, i, token);
+        i += 1;
+        break;
+      case '--proof-level':
+        parsed.proofLevel = consumeValue(argv, i, token);
         i += 1;
         break;
       case '--project':
@@ -148,6 +158,12 @@ export async function parseDesktopSubmitArgs(argv = []) {
   }
   if (!['click', 'enter'].includes(options.submitMethod)) {
     throw new StepError(ERROR_CODES.INVALID_ARGS, 'parse-args', '--submit-method must be either click or enter.');
+  }
+  if (!['same-window', 'new-window'].includes(options.surface)) {
+    throw new StepError(ERROR_CODES.INVALID_ARGS, 'parse-args', '--surface must be either same-window or new-window.');
+  }
+  if (!['fast', 'strict'].includes(options.proofLevel)) {
+    throw new StepError(ERROR_CODES.INVALID_ARGS, 'parse-args', '--proof-level must be either fast or strict.');
   }
   return options;
 }

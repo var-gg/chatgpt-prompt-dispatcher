@@ -8,6 +8,9 @@ export async function submitProChatgpt(argv = []) {
 export function normalizeSubmitProArgs(argv = []) {
   let hasMode = false;
   let hasNewChat = false;
+  let hasSurface = false;
+  let hasProofLevel = false;
+  let hasSubmitMethod = false;
   const normalized = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -61,6 +64,69 @@ export function normalizeSubmitProArgs(argv = []) {
       throw new StepError(ERROR_CODES.INVALID_ARGS, 'submit-pro-chatgpt', 'submit-pro-chatgpt always starts a new chat.');
     }
 
+    if (token === '--surface') {
+      const value = argv[i + 1];
+      if (!['same-window', 'new-window'].includes(value)) {
+        throw new StepError(ERROR_CODES.INVALID_ARGS, 'submit-pro-chatgpt', 'submit-pro-chatgpt only supports --surface same-window or --surface new-window.');
+      }
+      hasSurface = true;
+      normalized.push(token, value);
+      i += 1;
+      continue;
+    }
+
+    if (token.startsWith('--surface=')) {
+      const value = token.slice('--surface='.length);
+      if (!['same-window', 'new-window'].includes(value)) {
+        throw new StepError(ERROR_CODES.INVALID_ARGS, 'submit-pro-chatgpt', 'submit-pro-chatgpt only supports --surface same-window or --surface new-window.');
+      }
+      hasSurface = true;
+      normalized.push(token);
+      continue;
+    }
+
+    if (token === '--proof-level') {
+      const value = argv[i + 1];
+      if (!['fast', 'strict'].includes(value)) {
+        throw new StepError(ERROR_CODES.INVALID_ARGS, 'submit-pro-chatgpt', 'submit-pro-chatgpt only supports --proof-level fast or --proof-level strict.');
+      }
+      hasProofLevel = true;
+      normalized.push(token, value);
+      i += 1;
+      continue;
+    }
+
+    if (token.startsWith('--proof-level=')) {
+      const value = token.slice('--proof-level='.length);
+      if (!['fast', 'strict'].includes(value)) {
+        throw new StepError(ERROR_CODES.INVALID_ARGS, 'submit-pro-chatgpt', 'submit-pro-chatgpt only supports --proof-level fast or --proof-level strict.');
+      }
+      hasProofLevel = true;
+      normalized.push(token);
+      continue;
+    }
+
+    if (token === '--submit-method') {
+      const value = argv[i + 1];
+      if (!['click', 'enter'].includes(value)) {
+        throw new StepError(ERROR_CODES.INVALID_ARGS, 'submit-pro-chatgpt', 'submit-pro-chatgpt only supports --submit-method click or enter.');
+      }
+      hasSubmitMethod = true;
+      normalized.push(token, value);
+      i += 1;
+      continue;
+    }
+
+    if (token.startsWith('--submit-method=')) {
+      const value = token.slice('--submit-method='.length);
+      if (!['click', 'enter'].includes(value)) {
+        throw new StepError(ERROR_CODES.INVALID_ARGS, 'submit-pro-chatgpt', 'submit-pro-chatgpt only supports --submit-method click or enter.');
+      }
+      hasSubmitMethod = true;
+      normalized.push(token);
+      continue;
+    }
+
     normalized.push(token);
   }
 
@@ -69,6 +135,15 @@ export function normalizeSubmitProArgs(argv = []) {
   }
   if (!hasNewChat) {
     normalized.push('--new-chat');
+  }
+  if (!hasSurface) {
+    normalized.push('--surface', 'new-window');
+  }
+  if (!hasProofLevel) {
+    normalized.push('--proof-level', 'strict');
+  }
+  if (!hasSubmitMethod) {
+    normalized.push('--submit-method', 'click');
   }
 
   return normalized;

@@ -33,6 +33,7 @@ test('submitProChatgpt returns a Pro dry-run receipt through desktop transport',
   assert.equal(receipt.modeResolved, 'pro');
   assert.equal(receipt.surface, 'new-window');
   assert.equal(receipt.proofLevel, 'strict');
+  assert.equal(receipt.screenshotPath, null);
   assert.ok(receipt.notes.includes('transport=desktop'));
   assert.ok(receipt.notes.includes('newChat=true'));
   assert.ok(receipt.notes.includes('surface=new-window'));

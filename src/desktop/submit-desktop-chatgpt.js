@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { createFailureReceipt, createReceipt } from '../receipt.js';
 import { StepError, ERROR_CODES } from '../errors.js';
 import { parseDesktopSubmitArgs } from '../args.js';
@@ -80,10 +80,12 @@ export async function submitDesktopChatgpt(argv = []) {
   let clipboardHash = null;
   let logPath = null;
   let screenshotPath = null;
+  let capturedScreenshotPath = null;
   let targetWindowHandle = null;
   let modeResolved = 'auto';
   let surface = 'same-window';
   let proofLevel = 'fast';
+  let strictPreSubmitBaseline = null;
   const notes = [];
 
   try {
@@ -123,7 +125,7 @@ export async function submitDesktopChatgpt(argv = []) {
     notes.push(`targetBounds=${targetBounds.x},${targetBounds.y},${targetBounds.width},${targetBounds.height}`);
     notes.push(`promptPoint=${promptPoint.x},${promptPoint.y}`);
     notes.push(`submitPoint=${submitPoint.x},${submitPoint.y}`);
-    notes.push(`screenshotPath=${screenshotPath}`);
+    notes.push(`plannedScreenshotPath=${screenshotPath}`);
     notes.push(`logPath=${logPath}`);
 
     await writeJsonlLog(logPath, {
@@ -151,7 +153,7 @@ export async function submitDesktopChatgpt(argv = []) {
         url: CHATGPT_URL,
         surface,
         proofLevel,
-        screenshotPath,
+        screenshotPath: capturedScreenshotPath,
         notes
       });
     }
@@ -318,9 +320,24 @@ export async function submitDesktopChatgpt(argv = []) {
         proofLevel,
         targetWindowHandle,
         conversationUrl,
-        screenshotPath: proofLevel === 'strict' ? screenshotPath : null,
+        screenshotPath: proofLevel === 'strict' ? capturedScreenshotPath : null,
         notes
       });
+    }
+
+    if (proofLevel === 'strict') {
+      lastStep = 'strict-pre-submit-baseline';
+      strictPreSubmitBaseline = await collectStrictPreSubmitBaseline({
+        handle: selectedWindow.handle,
+        currentUrl,
+        screenshotPath,
+        stepDelayMs: args.stepDelayMs
+      });
+      currentUrl = strictPreSubmitBaseline.currentUrl || currentUrl;
+      capturedScreenshotPath = strictPreSubmitBaseline.screenshotPath || capturedScreenshotPath;
+      notes.push(`strictPreSubmit=${strictPreSubmitBaseline.proof}`);
+      notes.push(`strictPreSubmitTitle=${strictPreSubmitBaseline.windowTitle}`);
+      await writeJsonlLog(logPath, { step: lastStep, strictPreSubmitBaseline });
     }
 
     lastStep = 'submit-prompt';
@@ -346,12 +363,14 @@ export async function submitDesktopChatgpt(argv = []) {
         prompt,
         promptHash: validation.expectedHash || hashText(prompt),
         preSubmitUrl: currentUrl,
+        preSubmitBaseline: strictPreSubmitBaseline,
         screenshotPath,
         stepDelayMs: args.stepDelayMs
       });
       conversationUrl = strictProof.conversationUrl;
       currentUrl = strictProof.conversationUrl;
       screenshotPath = strictProof.screenshotPath;
+      capturedScreenshotPath = strictProof.screenshotPath || capturedScreenshotPath;
       notes.push(`strictProof=${strictProof.proof}`);
       notes.push(`conversationUrl=${conversationUrl}`);
       notes.push(`screenshotCaptured=${screenshotPath}`);
@@ -367,7 +386,7 @@ export async function submitDesktopChatgpt(argv = []) {
       proofLevel,
       targetWindowHandle,
       conversationUrl,
-      screenshotPath: proofLevel === 'strict' ? screenshotPath : null,
+      screenshotPath: proofLevel === 'strict' ? capturedScreenshotPath : null,
       notes
     });
   } catch (error) {
@@ -397,7 +416,7 @@ export async function submitDesktopChatgpt(argv = []) {
       proofLevel,
       targetWindowHandle,
       conversationUrl,
-      screenshotPath: proofLevel === 'strict' ? screenshotPath : null,
+      screenshotPath: proofLevel === 'strict' ? capturedScreenshotPath : null,
       notes: failureNotes
     });
   }
@@ -498,6 +517,7 @@ async function collectStrictSubmitProof({
   prompt,
   promptHash,
   preSubmitUrl,
+  preSubmitBaseline = null,
   screenshotPath,
   stepDelayMs
 }) {
@@ -509,7 +529,7 @@ async function collectStrictSubmitProof({
     );
   }
 
-  const preSubmitConversationId = extractChatGptConversationId(preSubmitUrl);
+  const preSubmitConversationId = preSubmitBaseline?.conversationId || extractChatGptConversationId(preSubmitUrl);
   const conversationProof = await waitForCondition({
     step: 'strict-submit-proof',
     attempts: STRICT_CONVERSATION_WAIT_ATTEMPTS,
@@ -542,29 +562,88 @@ async function collectStrictSubmitProof({
     ? conversationProof.currentUrl
     : (ocrProof?.conversationUrl || '');
   const conversationId = extractChatGptConversationId(conversationUrl);
-  if (!conversationId || conversationId === preSubmitConversationId) {
+  const postSubmitScreenshotPath = ocrProof?.screenshotPath || screenshotCapture.screenshotPath;
+  const postSubmitScreenshotHash = await hashFile(postSubmitScreenshotPath).catch(() => '');
+  const postSubmitAssessment = assessStrictPostSubmitEvidence({
+    preSubmitConversationId,
+    conversationUrl,
+    preSubmitScreenshotHash: preSubmitBaseline?.screenshotHash || '',
+    postSubmitScreenshotHash
+  });
+
+  if (!conversationId || conversationId === preSubmitConversationId || !postSubmitAssessment.ok) {
     throw new StepError(
       ERROR_CODES.STRICT_PROOF_FAILED,
       'strict-submit-proof',
-      'Strict proof could not verify a new ChatGPT conversation URL after submit.',
+      postSubmitAssessment.ok
+        ? 'Strict proof could not verify a new ChatGPT conversation URL after submit.'
+        : 'Strict proof could not verify a visible post-submit state change after submit.',
       {
         preSubmitUrl,
+        preSubmitBaseline,
         conversationProof,
         ocrProof,
-        screenshotPath: screenshotCapture.screenshotPath
+        screenshotPath: postSubmitScreenshotPath,
+        postSubmitAssessment
       }
     );
   }
 
   return {
     proof: conversationProof.ok
-      ? 'conversationUrlCreated+screenshotCaptured'
-      : 'conversationUrlRecoveredFromWindowOcr+screenshotCaptured',
+      ? 'conversationUrlCreated+screenshotCaptured+screenshotChanged'
+      : 'conversationUrlRecoveredFromWindowOcr+screenshotCaptured+screenshotChanged',
     conversationUrl,
     conversationId,
-    screenshotPath: screenshotCapture.screenshotPath,
+    screenshotPath: postSubmitScreenshotPath,
     rect: screenshotCapture.rect || null,
     ocrTextSample: String(ocrProof?.ocrText || '').slice(0, 240)
+  };
+}
+
+async function collectStrictPreSubmitBaseline({
+  handle,
+  currentUrl,
+  screenshotPath,
+  stepDelayMs
+}) {
+  const observedUrl = await readCurrentUrl(handle).catch(() => '');
+  const windowTitle = await readWindowTitle(handle).catch(() => '');
+  const baselineScreenshotPath = resolveStrictBaselineScreenshotPath(screenshotPath);
+  const screenshotCapture = await captureStrictProofScreenshot(handle, baselineScreenshotPath, stepDelayMs);
+  const screenshotHash = await hashFile(screenshotCapture.screenshotPath).catch(() => '');
+  const ocrResult = await ocrImageText(screenshotCapture.screenshotPath).catch(() => ({ text: '' }));
+  const ocrText = String(ocrResult?.text || '');
+  const assessment = assessStrictPreSubmitSurface({
+    currentUrl: observedUrl || currentUrl || '',
+    windowTitle,
+    ocrText
+  });
+
+  if (!assessment.ok) {
+    throw new StepError(
+      ERROR_CODES.STRICT_PROOF_FAILED,
+      'strict-pre-submit-baseline',
+      'Strict proof baseline did not confirm a fresh ChatGPT home surface before submit.',
+      {
+        observedUrl,
+        currentUrl,
+        windowTitle,
+        ocrTextSample: ocrText.slice(0, 240),
+        screenshotPath: screenshotCapture.screenshotPath,
+        assessment
+      }
+    );
+  }
+
+  return {
+    ...assessment,
+    currentUrl: assessment.currentUrl || currentUrl || CHATGPT_URL,
+    windowTitle,
+    screenshotPath: screenshotCapture.screenshotPath,
+    screenshotHash,
+    rect: screenshotCapture.rect || null,
+    ocrTextSample: ocrText.slice(0, 240)
   };
 }
 
@@ -1084,7 +1163,7 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
   const insertionHashMatched = insertion?.actualHash === expectedHash;
   const promptFocusLooksCredible = looksLikeComposerElement(promptFocus?.focusedElement) || looksLikeComposerElement(promptFocus?.element);
 
-  if (insertionHashMatched && promptFocusLooksCredible) {
+  if (insertionHashMatched && promptFocusLooksCredible && shouldTrustFocusSafeHashProof(insertion)) {
     return {
       method: `${insertion?.method || 'unknown'}+focus-safe-hash-proof`,
       expectedHash,
@@ -1119,14 +1198,18 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
           prompt,
           actualHash: hashText(proof.text)
         });
-        const promptPresent = proof.text.includes(prompt);
-        return {
-          ok: promptPresent,
-          proof: promptPresent ? 'promptPresentComposerCredible' : 'composerTextStillHydrating',
-          ...proof,
-          submitState: insertion?.afterSubmitState || insertion?.beforeSubmitState || null,
-          sendTransitionProven: Boolean(insertion?.visibleSendStateProven)
-        };
+      const submitState = await sampleVisibleSubmitState(handle).catch(() => null);
+      const promptPresent = proof.text.includes(prompt);
+      const sendable = hasVisibleSendableState(submitState);
+      return {
+        ok: promptPresent && sendable,
+        proof: promptPresent
+          ? (sendable ? 'promptPresentComposerCredibleAndSendable' : 'composerContainsPromptButNotSendable')
+          : 'composerTextStillHydrating',
+        ...proof,
+        submitState: submitState || insertion?.afterSubmitState || insertion?.beforeSubmitState || null,
+        sendTransitionProven: Boolean(insertion?.visibleSendStateProven)
+      };
       },
       failureCode: 'PROMPT_VALIDATION_FAILED',
       failureMessage: insertion?.proof === 'coordinateClipboardRoundtripUnconfirmed'
@@ -1136,7 +1219,7 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
   } catch (error) {
     if (error instanceof StepError && error.code === 'PROMPT_VALIDATION_FAILED') {
       const recovery = await recoverPromptWithSlowClipboardRoundtrip(handle, prompt, promptFocus, stepDelayMs).catch(() => null);
-      if (recovery?.ok) {
+      if (recovery?.ok && hasVisibleSendableState(recovery.submitState)) {
         return {
           method: `${insertion?.method || 'unknown'}+slow-clipboard-roundtrip-recovery`,
           expectedHash,
@@ -1170,6 +1253,32 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
   };
 }
 
+function shouldTrustFocusSafeHashProof(insertion) {
+  if (!insertion) return false;
+  if (insertion.visibleSendStateProven) return true;
+  if (!hasVisibleSendableState(insertion.afterSubmitState) && !hasVisibleSendableState(insertion.beforeSubmitState)) {
+    return false;
+  }
+
+  const method = String(insertion.method || '').toLowerCase();
+  const proof = String(insertion.proof || '').toLowerCase();
+  const strongSignals = [
+    'composertextcontainsprompt',
+    'coordinatecomposerproofcontainsprompt',
+    'coordinateclipboardroundtripmatchedprompt',
+    'recoveredbyslowclipboardroundtrip',
+    'clipboard-roundtrip',
+    'roundtrip',
+    'composer-proof'
+  ];
+
+  if (strongSignals.some((signal) => method.includes(signal) || proof.includes(signal))) {
+    return true;
+  }
+
+  return !(method.includes('value-set') || proof.includes('value-set'));
+}
+
 async function recoverPromptWithSlowClipboardRoundtrip(handle, prompt, promptFocus, stepDelayMs) {
   const composerTarget = await refocusComposer(handle, promptFocus, stepDelayMs)
     .catch(() => promptFocus?.focusedElement || promptFocus?.element || null);
@@ -1186,17 +1295,24 @@ async function recoverPromptWithSlowClipboardRoundtrip(handle, prompt, promptFoc
   await settleAfterPaste(stepDelayMs, prompt);
   await sendKeys('a', ['ctrl']);
   await settleAfterSelectAll(stepDelayMs);
+  const sentinel = `__codex_slow_roundtrip_probe_${crypto.randomUUID()}__`;
+  await setClipboardText(sentinel);
+  await delay(stepDelayMs);
   await sendKeys('c', ['ctrl']);
   await settleAfterCopy(stepDelayMs);
   const clipboard = await getClipboardText();
   const copied = normalizeComposerText(clipboard.text);
   const submitState = await sampleVisibleSubmitState(handle).catch(() => null);
+  const copiedFromComposer = copied !== sentinel && copied === prompt;
+  const sendable = hasVisibleSendableState(submitState);
 
   return {
-    ok: copied === prompt,
+    ok: copiedFromComposer && sendable,
     focusedElement: composerTarget,
     composerElement: composerTarget,
-    proof: copied === prompt ? 'recoveredBySlowClipboardRoundtrip' : 'slowClipboardRoundtripStillUnconfirmed',
+    proof: copiedFromComposer
+      ? (sendable ? 'recoveredBySlowClipboardRoundtrip' : 'slowClipboardRoundtripCopiedPromptButNotSendable')
+      : 'slowClipboardRoundtripStillUnconfirmed',
     copied,
     submitState: submitState ? {
       submitButton: submitState.submitButton || null,
@@ -1446,6 +1562,71 @@ function normalizeComposerText(text) {
 
 function normalizePromptForSubmission(prompt) {
   return String(prompt || '').replace(/\r/g, '').replace(/\uFFFC/g, '').trimEnd();
+}
+
+function resolveStrictBaselineScreenshotPath(screenshotPath) {
+  const parsed = path.parse(path.resolve(screenshotPath));
+  return path.join(parsed.dir, `${parsed.name}.pre-submit${parsed.ext || '.png'}`);
+}
+
+async function hashFile(filePath) {
+  const buffer = await readFile(filePath);
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+async function readWindowTitle(handle) {
+  const windows = await listChromeWindows();
+  const match = windows.find((window) => String(window.handle) === String(handle));
+  return String(match?.title || '').trim();
+}
+
+function assessStrictPreSubmitSurface({ currentUrl, windowTitle = '', ocrText = '' }) {
+  const resolvedUrl = isChatGptUrl(currentUrl) ? currentUrl : '';
+  const currentConversationUrl = isChatGptConversationUrl(resolvedUrl) ? resolvedUrl : '';
+  const ocrConversationUrl = extractConversationUrlFromOcrText(ocrText);
+  const conversationUrl = currentConversationUrl || ocrConversationUrl;
+  const conversationId = extractChatGptConversationId(conversationUrl);
+  const titleLooksFresh = isExactChatGptShellTitle(windowTitle);
+  const homeUrlConfirmed = isChatGptHomeUrl(resolvedUrl);
+  const ok = !conversationId && (homeUrlConfirmed || titleLooksFresh);
+
+  return {
+    ok,
+    proof: conversationId
+      ? 'preSubmitConversationAlreadyVisible'
+      : (homeUrlConfirmed ? 'preSubmitHomeUrlConfirmed' : (titleLooksFresh ? 'preSubmitExactShellTitleConfirmed' : 'preSubmitFreshSurfaceUnproven')),
+    currentUrl: resolvedUrl,
+    conversationUrl,
+    conversationId,
+    titleLooksFresh,
+    homeUrlConfirmed
+  };
+}
+
+function assessStrictPostSubmitEvidence({
+  preSubmitConversationId = '',
+  conversationUrl = '',
+  preSubmitScreenshotHash = '',
+  postSubmitScreenshotHash = ''
+}) {
+  const conversationId = extractChatGptConversationId(conversationUrl);
+  if (!conversationId) {
+    return { ok: false, proof: 'postSubmitConversationUrlMissing', conversationId };
+  }
+  if (preSubmitConversationId && conversationId === preSubmitConversationId) {
+    return { ok: false, proof: 'postSubmitConversationUrlUnchanged', conversationId };
+  }
+  if (preSubmitScreenshotHash && postSubmitScreenshotHash && preSubmitScreenshotHash === postSubmitScreenshotHash) {
+    return { ok: false, proof: 'postSubmitScreenshotUnchanged', conversationId };
+  }
+  return { ok: true, proof: 'postSubmitConversationUrlNewAndScreenshotChanged', conversationId };
+}
+
+function isExactChatGptShellTitle(title) {
+  const normalized = String(title || '').trim().toLowerCase();
+  return normalized === 'chatgpt - chrome'
+    || normalized === 'chatgpt - google chrome'
+    || normalized === 'chatgpt - microsoft edge';
 }
 
 function ensurePromptTargetLooksCredible({ promptFocus, focusedElement, currentUrlAfterValidation, prompt, actualHash }) {
@@ -1803,6 +1984,10 @@ function hasCredibleComposerFocus(proof) {
   return looksLikeComposerElement(proof?.focusedElement) || looksLikeComposerElement(proof?.element);
 }
 
+function hasVisibleSendableState(state) {
+  return Boolean(state?.sendable) || isSendableSubmitState(state?.submitButton);
+}
+
 function shouldTrustValidatedPromptForSubmit(validatedHashMatched, promptFocus, proof = null) {
   return Boolean(validatedHashMatched) && (hasCredibleComposerFocus(proof) || hasCredibleComposerFocus(promptFocus));
 }
@@ -2140,6 +2325,7 @@ export const __desktopSubmitInternals = {
   normalizeComposerText,
   normalizePromptForSubmission,
   isLongPrompt,
+  shouldTrustFocusSafeHashProof,
   hasCredibleComposerFocus,
   shouldTrustValidatedPromptForSubmit,
   shouldReprimePromptBeforeSubmit,
@@ -2154,7 +2340,10 @@ export const __desktopSubmitInternals = {
   extractChatGptConversationId,
   isChatGptConversationUrl,
   extractConversationUrlFromOcrText,
+  assessStrictPreSubmitSurface,
+  assessStrictPostSubmitEvidence,
   pickOpenedBrowserWindow,
   resolveDesktopScreenshotPath,
+  resolveStrictBaselineScreenshotPath,
   isRectClose
 };

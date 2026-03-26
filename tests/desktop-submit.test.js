@@ -12,6 +12,7 @@ const {
   looksLikeComposerPlaceholderText,
   normalizePromptForSubmission,
   isLongPrompt,
+  shouldTrustFocusSafeHashProof,
   hasCredibleComposerFocus,
   shouldTrustValidatedPromptForSubmit,
   shouldReprimePromptBeforeSubmit,
@@ -26,8 +27,11 @@ const {
   extractChatGptConversationId,
   isChatGptConversationUrl,
   extractConversationUrlFromOcrText,
+  assessStrictPreSubmitSurface,
+  assessStrictPostSubmitEvidence,
   pickOpenedBrowserWindow,
   resolveDesktopScreenshotPath,
+  resolveStrictBaselineScreenshotPath,
   isRectClose
 } = __desktopSubmitInternals;
 
@@ -252,6 +256,29 @@ test('shouldTrustValidatedPromptForSubmit allows submit without button discovery
   assert.equal(shouldTrustValidatedPromptForSubmit(false, promptFocus), false);
 });
 
+test('shouldTrustFocusSafeHashProof rejects value-only insertion but accepts roundtrip-backed proof', () => {
+  assert.equal(shouldTrustFocusSafeHashProof({
+    method: 'uia-focus+value-set+submit-attempt-ready',
+    proof: 'uia-focus+value-set+composerTextPending',
+    visibleSendStateProven: false,
+    afterSubmitState: { sendable: true }
+  }), false);
+
+  assert.equal(shouldTrustFocusSafeHashProof({
+    method: 'uia-focus+slow-clipboard-roundtrip+submit-attempt-ready',
+    proof: 'recoveredBySlowClipboardRoundtrip',
+    visibleSendStateProven: false,
+    afterSubmitState: { sendable: false }
+  }), false);
+
+  assert.equal(shouldTrustFocusSafeHashProof({
+    method: 'uia-focus+slow-clipboard-roundtrip+submit-attempt-ready',
+    proof: 'recoveredBySlowClipboardRoundtrip',
+    visibleSendStateProven: false,
+    afterSubmitState: { sendable: true }
+  }), true);
+});
+
 test('shouldReprimePromptBeforeSubmit forces a fresh paste after clipboard-based validation', () => {
   assert.equal(shouldReprimePromptBeforeSubmit(
     {
@@ -311,6 +338,50 @@ test('conversation URL helpers distinguish ChatGPT home and dedicated conversati
   );
 });
 
+test('strict pre-submit surface assessment rejects visible conversation reuse', () => {
+  assert.deepEqual(
+    assessStrictPreSubmitSurface({
+      currentUrl: 'https://chatgpt.com/',
+      windowTitle: 'ChatGPT - Chrome',
+      ocrText: ''
+    }),
+    {
+      ok: true,
+      proof: 'preSubmitHomeUrlConfirmed',
+      currentUrl: 'https://chatgpt.com/',
+      conversationUrl: '',
+      conversationId: '',
+      titleLooksFresh: true,
+      homeUrlConfirmed: true
+    }
+  );
+
+  assert.equal(
+    assessStrictPreSubmitSurface({
+      currentUrl: '',
+      windowTitle: 'desktop install dry-run - Chrome',
+      ocrText: 'chatgpt.com/c/69c4ed24-18f8-83ab-940b-ee42518a9678'
+    }).ok,
+    false
+  );
+});
+
+test('strict post-submit assessment requires a new conversation and changed screenshot', () => {
+  assert.equal(assessStrictPostSubmitEvidence({
+    preSubmitConversationId: '',
+    conversationUrl: 'https://chatgpt.com/c/new-id',
+    preSubmitScreenshotHash: 'before',
+    postSubmitScreenshotHash: 'after'
+  }).ok, true);
+
+  assert.equal(assessStrictPostSubmitEvidence({
+    preSubmitConversationId: '',
+    conversationUrl: 'https://chatgpt.com/c/new-id',
+    preSubmitScreenshotHash: 'same',
+    postSubmitScreenshotHash: 'same'
+  }).ok, false);
+});
+
 test('pickOpenedBrowserWindow only accepts a genuinely new top-level handle', () => {
   const before = [
     { handle: '101', title: 'ChatGPT - Chrome' },
@@ -337,6 +408,10 @@ test('resolveDesktopScreenshotPath creates deterministic artifact paths when non
   assert.ok(generated.includes('screenshots'));
   assert.ok(generated.includes('desktop-submit-default-'));
   assert.ok(generated.endsWith('.png'));
+
+  const baseline = resolveStrictBaselineScreenshotPath(generated);
+  assert.ok(baseline.includes('.pre-submit'));
+  assert.ok(baseline.endsWith('.png'));
 });
 
 test('isRectClose tolerates small window settling drift only', () => {

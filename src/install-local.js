@@ -67,14 +67,15 @@ async function materializeBundle(target, mode) {
 }
 
 async function ensureBundleBuilt() {
-  try {
-    await access(bundleSkillRoot);
-  } catch {
-    if (isBundleRuntime) {
+  if (isBundleRuntime) {
+    try {
+      await access(bundleSkillRoot);
+      return;
+    } catch {
       throw new Error(`Bundle root not found: ${bundleSkillRoot}`);
     }
-    await execFileAsync(process.execPath, ['src/pack-skill.js'], { cwd: repoRoot });
   }
+  await execFileAsync(process.execPath, ['src/pack-skill.js'], { cwd: repoRoot });
 }
 
 async function installRuntimeDeps(target) {

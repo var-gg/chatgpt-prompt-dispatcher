@@ -11,6 +11,7 @@ async function main() {
   await mkdir(bundleSkillRoot, { recursive: true });
 
   await copyFile(path.join(repoRoot, 'skill', 'SKILL.md'), path.join(bundleSkillRoot, 'SKILL.md'));
+  await copyDir(path.join(repoRoot, 'skill', 'agents'), path.join(bundleSkillRoot, 'agents'));
   await copyDir(path.join(repoRoot, 'skill', 'references'), path.join(bundleSkillRoot, 'references'));
   await copyDir(path.join(repoRoot, 'skill', 'scripts'), path.join(bundleSkillRoot, 'scripts'));
   await copyDir(path.join(repoRoot, 'profiles'), path.join(bundleSkillRoot, 'profiles'));
@@ -42,7 +43,7 @@ async function main() {
       discoverableBy: 'SKILL.md-at-bundle-root',
       registerCommand: 'npm run register-openclaw'
     },
-    contents: ['SKILL.md', 'references/', 'scripts/', 'profiles/', 'adapters/', 'runtime/', 'skill.install.lock.json']
+    contents: ['SKILL.md', 'agents/', 'references/', 'scripts/', 'profiles/', 'adapters/', 'runtime/', 'skill.install.lock.json']
   }, null, 2) + '\n');
 
   const zipBase = path.join(distRoot, 'chatgpt-web-submit-bundle');

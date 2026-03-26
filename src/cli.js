@@ -1,6 +1,7 @@
 import { loadProfile } from './profile-loader.js';
 import { validateConfig } from './config-schema.js';
 import { submitChatgpt } from './submit-chatgpt.js';
+import { submitProChatgpt } from './submit-pro-chatgpt.js';
 import { submitBrowserChatgpt } from './submit-browser-chatgpt.js';
 import { warmupChatgpt } from './warmup-chatgpt.js';
 import { runSmoke } from './smoke.js';
@@ -34,6 +35,12 @@ export async function runCli(argv = []) {
 
   if (command === 'submit-chatgpt') {
     const receipt = await submitChatgpt(argv.slice(1));
+    console.log(JSON.stringify(receipt, null, 2));
+    return;
+  }
+
+  if (command === 'submit-pro-chatgpt') {
+    const receipt = await submitProChatgpt(argv.slice(1));
     console.log(JSON.stringify(receipt, null, 2));
     return;
   }
@@ -80,6 +87,7 @@ function printHelp() {
     '  profile:show <name>               Load and print a sample profile',
     '  smoke                             Run placeholder smoke check',
     '  submit-chatgpt [opts]             Submit a prompt through the default Windows desktop transport',
+    '  submit-pro-chatgpt [opts]         Open a fresh desktop chat, switch to Pro, and submit the prompt',
     '  submit-browser-chatgpt [opts]     Submit through the experimental browser transport (Playwright)',
     '  warmup-chatgpt [opts]             Open ChatGPT and hold the browser for manual login/captcha',
     '  submit-desktop-chatgpt [opts]     Explicit alias for the default Windows desktop transport',
@@ -88,6 +96,7 @@ function printHelp() {
     '',
     'Transport notes:',
     '  - submit-chatgpt defaults to the Windows desktop input dispatcher',
+    '  - submit-pro-chatgpt is a desktop-only Pro handoff shortcut',
     '  - pass --transport=browser or use submit-browser-chatgpt for the experimental browser path',
     '  - no command in this repo reads or scrapes assistant responses',
   ].join('\n'));

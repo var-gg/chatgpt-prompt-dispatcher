@@ -20,6 +20,9 @@ Default command:
 Explicit alias:
 - `submit-desktop-chatgpt`
 
+Dedicated Pro shortcut:
+- `submit-pro-chatgpt`
+
 Implementation:
 - `src/submit-chatgpt.js` routes to desktop unless `--transport=browser` is present.
 - `src/desktop/submit-desktop-chatgpt.js` performs the Windows input dispatch.
@@ -28,6 +31,8 @@ Implementation:
 Current desktop scope:
 - focus a visible ChatGPT window
 - resize toward calibrated bounds
+- optionally open a fresh chat
+- optionally switch to `Pro`
 - click calibrated prompt anchor
 - paste prepared prompt
 - optionally submit via click or Enter
@@ -36,7 +41,7 @@ Current desktop scope:
 Current desktop non-goals:
 - project entry
 - attachment upload
-- browser-side mode selection beyond the default path
+- desktop `thinking` / deep-research style mode selection beyond `Pro`
 - response scraping or reading
 
 If a caller requests unsupported browser-only features, desktop returns an argument failure and points the caller to the experimental browser transport.

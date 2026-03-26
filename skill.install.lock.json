@@ -1,9 +1,9 @@
 {
   "version": "0.1.0",
-  "commitSha": "662ec61",
+  "commitSha": "17a447a",
   "profile": "default",
   "installedPath": "C:\\Users\\curioustore\\.openclaw\\skills\\chatgpt-web-submit",
   "installMode": "copy",
-  "installedAt": "2026-03-25T05:47:26.466Z",
+  "installedAt": "2026-03-26T02:05:01.655Z",
   "runtimeEntry": "C:\\Users\\curioustore\\.openclaw\\skills\\chatgpt-web-submit\\runtime\\src\\index.js"
 }

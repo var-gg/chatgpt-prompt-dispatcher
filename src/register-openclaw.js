@@ -12,9 +12,21 @@ async function main(argv = process.argv.slice(2)) {
 
   const args = [installEntry, '--mode', 'copy', '--target', defaultInstallTarget, ...argv];
   const result = await run(process.execPath, args, isBundleRuntime ? path.join(repoRoot, 'runtime') : repoRoot);
+  const wrapperEntry = path.join(defaultInstallTarget, 'scripts', 'submit-pro.js');
   console.log(JSON.stringify({
     registered: true,
+    skillId: 'chatgpt-web-submit',
     target: defaultInstallTarget,
+    wrapperEntry,
+    verifyCommand: [
+      process.execPath,
+      wrapperEntry,
+      '--prompt',
+      'desktop install dry-run',
+      '--dry-run',
+      '--window-title',
+      'ChatGPT'
+    ],
     install: JSON.parse(result.stdout)
   }, null, 2));
 }

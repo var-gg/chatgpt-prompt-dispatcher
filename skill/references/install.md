@@ -1,11 +1,32 @@
-# Install and Packaging
+# Install and Forward-testing
+
+## Repo URL Only Quickstart
+
+If another agent only has the repository URL and needs to make the skill usable on the local machine, prefer this exact sequence from the repo root:
+
+```bash
+git clone https://github.com/var-gg/chatgpt-prompt-dispatcher.git
+cd chatgpt-prompt-dispatcher
+npm install
+npm run register-openclaw
+node ~/.openclaw/skills/chatgpt-web-submit/scripts/submit-pro.js --prompt "desktop install dry-run" --dry-run --window-title "ChatGPT"
+```
+
+This is the canonical bootstrap path because `register-openclaw`:
+- builds the bundle if it does not exist yet
+- copies the materialized skill into `~/.openclaw/skills/chatgpt-web-submit`
+- installs runtime dependencies in the installed skill root
+- avoids changing OpenClaw core code
+
+Use `install-local` directly only when you need a non-default target path or a symlink install mode.
 
 ## Portable Bundle
 
-The portable bundle is the `skill/` directory plus its runtime-facing adapter metadata produced by `npm run pack-skill`.
+The portable bundle is the `skill/` directory plus the packaged runtime copied by `npm run pack-skill`.
 
-Bundle contents are self-contained and include:
+Bundle contents include:
 - `SKILL.md`
+- `agents/openai.yaml`
 - `references/`
 - `scripts/`
 - `profiles/`
@@ -14,55 +35,72 @@ Bundle contents are self-contained and include:
 - `bundle.manifest.json`
 - `skill.install.lock.json`
 
-## Package Command
+## Build the Bundle
 
 ```bash
 npm run pack-skill
 ```
 
-This creates a shareable bundle under `dist/skill-bundle/` and a zip archive under `dist/`.
+Outputs:
+- `dist/skill-bundle/chatgpt-web-submit/`
+- `dist/chatgpt-web-submit-bundle.zip`
 
-## Local Install Command
+## Install Locally
 
-From the repo checkout:
+From the repo:
 
 ```bash
-npm run install-local -- --target <path> --mode symlink
-npm run install-local -- --target <path> --mode copy
+npm install
+npm run install-local -- --target ~/.openclaw/skills/chatgpt-web-submit --mode copy
+npm run register-openclaw
 ```
 
-From the packaged bundle only:
+From a packaged bundle:
 
 ```bash
-node scripts/install-local.js --target <path> --mode copy
+node scripts/install-local.js --target ~/.openclaw/skills/chatgpt-web-submit --mode copy
 node scripts/register-openclaw.js
 ```
 
-Defaults:
-- target: `~/.openclaw/skills/chatgpt-web-submit`
-- mode: `copy`
+Default install target:
+- `~/.openclaw/skills/chatgpt-web-submit`
 
-## Runtime Commands After Install
+## Runtime Commands
 
-Primary:
-- `submit-chatgpt` → desktop-first transport
+Primary commands:
+- `submit-pro-chatgpt`
+- `submit-chatgpt`
+- `submit-desktop-chatgpt`
+
+Installed wrapper:
+
+```bash
+node ~/.openclaw/skills/chatgpt-web-submit/scripts/submit-pro.js --prompt-file <prompt-file>
+```
 
 Diagnostics:
 - `inspect-desktop-chatgpt`
 - `calibrate-desktop-chatgpt`
 
-Compatibility / experimental:
+Compatibility path:
 - `submit-browser-chatgpt`
 - `submit-chatgpt --transport=browser`
 
-## Install Lock
+## Self-hosted Forward-testing
 
-`skill.install.lock.json` records:
-- bundle version
-- source commit SHA
-- selected profile
-- installed path
-- install mode
-- installed timestamp
+Use real tasks while keeping the no-response-reading boundary.
 
-Treat it as an install-state record, not a runtime transcript.
+Recommended checks:
+1. Materialize the skill into a local skill root.
+2. Run a dry-run through the installed wrapper:
+
+```bash
+node scripts/submit-pro.js --prompt-file <prompt-file> --dry-run
+```
+
+3. Run a real submission once calibration is trusted.
+4. Validate that the skill wording naturally supports both:
+   - rough request -> final prompt synthesis -> submit
+   - explicit prompt -> submit as-is
+
+If the skill feels awkward during real use, fix the skill text or wrapper first, then CLI help, then broader docs.

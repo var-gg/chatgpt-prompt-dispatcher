@@ -115,6 +115,10 @@ export async function uiaReadFocusedText() {
   return client().call('uiaReadFocusedText', {}, { step: 'desktop-uia-read-focused-text', timeoutMs: 5000 });
 }
 
+export async function uiaSetFocusedValue(value) {
+  return client().call('uiaSetFocusedValue', { value }, { step: 'desktop-uia-set-focused-value', timeoutMs: 5000 });
+}
+
 export async function waitForWindow(target = {}, timeoutMs = 5000) {
   return client().call('waitForWindow', { ...target, timeoutMs }, { step: 'desktop-wait-window', timeoutMs: timeoutMs + 1000 });
 }

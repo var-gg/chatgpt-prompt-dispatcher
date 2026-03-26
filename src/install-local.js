@@ -39,14 +39,17 @@ async function main(argv = process.argv.slice(2)) {
   await writeFile(path.join(target, 'skill.install.lock.json'), JSON.stringify(lock, null, 2) + '\n');
 
   const statInfo = await lstat(target);
+  const wrapperEntry = path.join(target, 'scripts', 'submit-pro.js');
   console.log(JSON.stringify({
     installed: true,
     target,
+    skillId: 'chatgpt-web-submit',
     mode: options.mode,
     profile: options.profile,
     isSymlink: statInfo.isSymbolicLink(),
     commitSha: lock.commitSha,
     runtimeEntry,
+    wrapperEntry,
     sourceBundle: bundleSkillRoot
   }, null, 2));
 }

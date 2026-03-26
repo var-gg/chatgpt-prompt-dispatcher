@@ -42,8 +42,8 @@ public static class DesktopWorkerWin32 {
 
   [StructLayout(LayoutKind.Sequential)]
   public struct KEYBDINPUT {
-    public short wVk;
-    public short wScan;
+    public ushort wVk;
+    public ushort wScan;
     public int dwFlags;
     public int time;
     public IntPtr dwExtraInfo;
@@ -181,7 +181,7 @@ function Send-KeyInput($vk, [bool]$keyUp = $false) {
   $input = New-Object DesktopWorkerWin32+INPUT
   $input.type = $INPUT_KEYBOARD
   $ki = New-Object DesktopWorkerWin32+KEYBDINPUT
-  $ki.wVk = [int16]$vk
+  $ki.wVk = [uint16]$vk
   $ki.wScan = 0
   $ki.dwFlags = if ($keyUp) { $KEYEVENTF_KEYUP } else { 0 }
   $ki.time = 0
@@ -198,14 +198,14 @@ function Send-UnicodeChars([string]$text) {
     $down.U = New-Object DesktopWorkerWin32+InputUnion
     $down.U.ki = New-Object DesktopWorkerWin32+KEYBDINPUT
     $down.U.ki.wVk = 0
-    $down.U.ki.wScan = [int][char]$ch
+    $down.U.ki.wScan = [uint16][char]$ch
     $down.U.ki.dwFlags = $KEYEVENTF_UNICODE
     $up = New-Object DesktopWorkerWin32+INPUT
     $up.type = $INPUT_KEYBOARD
     $up.U = New-Object DesktopWorkerWin32+InputUnion
     $up.U.ki = New-Object DesktopWorkerWin32+KEYBDINPUT
     $up.U.ki.wVk = 0
-    $up.U.ki.wScan = [int][char]$ch
+    $up.U.ki.wScan = [uint16][char]$ch
     $up.U.ki.dwFlags = $KEYEVENTF_UNICODE -bor $KEYEVENTF_KEYUP
     [void][DesktopWorkerWin32]::SendInput(2, @($down, $up), [System.Runtime.InteropServices.Marshal]::SizeOf([type]'DesktopWorkerWin32+INPUT'))
   }
@@ -322,8 +322,7 @@ function Read-UiaText($element) {
 
   $patterns = @(
     [System.Windows.Automation.ValuePattern]::Pattern,
-    [System.Windows.Automation.TextPattern]::Pattern,
-    [System.Windows.Automation.LegacyIAccessiblePattern]::Pattern
+    [System.Windows.Automation.TextPattern]::Pattern
   )
 
   foreach ($patternId in $patterns) {
@@ -334,10 +333,6 @@ function Read-UiaText($element) {
         }
         if ($pattern -is [System.Windows.Automation.TextPattern]) {
           return [string]$pattern.DocumentRange.GetText(-1)
-        }
-        if ($pattern -is [System.Windows.Automation.LegacyIAccessiblePattern]) {
-          if ($pattern.Current.Value) { return [string]$pattern.Current.Value }
-          if ($pattern.Current.Name) { return [string]$pattern.Current.Name }
         }
       }
     } catch {
@@ -565,6 +560,22 @@ function Invoke-Method($method, $params) {
         throw (New-ErrorResult 'UIA_EMPTY' 'No focused UI Automation element found.')
       }
       if (-not $focused) { throw (New-ErrorResult 'UIA_EMPTY' 'No focused UI Automation element found.') }
+      return @{ element = (Convert-UiaElement $focused); text = (Read-UiaText $focused) }
+    }
+    'uiaSetFocusedValue' {
+      try {
+        $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+      } catch {
+        throw (New-ErrorResult 'UIA_EMPTY' 'No focused UI Automation element found.')
+      }
+      if (-not $focused) { throw (New-ErrorResult 'UIA_EMPTY' 'No focused UI Automation element found.') }
+      try {
+        $pattern = $focused.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+        $pattern.SetValue([string]$params.value)
+      } catch {
+        throw (New-ErrorResult 'UIA_SET_VALUE_FAILED' 'Focused UI Automation element does not support ValuePattern.SetValue().' @{ valuePreview = ([string]$params.value).Substring(0, [Math]::Min(([string]$params.value).Length, 80)) })
+      }
+      Start-Sleep -Milliseconds 120
       return @{ element = (Convert-UiaElement $focused); text = (Read-UiaText $focused) }
     }
     'waitForWindow' {

@@ -3,8 +3,11 @@ import { createFailureReceipt, createReceipt } from '../receipt.js';
 import { StepError, ERROR_CODES } from '../errors.js';
 import { parseDesktopSubmitArgs } from '../args.js';
 import { defaultLogPath, writeJsonlLog } from '../logger.js';
+import { loadProfile } from '../profile-loader.js';
+import { validateConfig } from '../config-schema.js';
 import { loadCalibrationProfile } from './calibration-store.js';
 import { getStandardWindowBounds, resolveAnchorPoint } from './geometry.js';
+import { selectDesktopMode, startDesktopNewChat } from './chatgpt-desktop-actions.js';
 import {
   clickPoint,
   delay,
@@ -22,7 +25,9 @@ import {
   uiaGetFocusedElement,
   uiaInvoke,
   uiaQuery,
+  uiaReadFocusedText,
   uiaReadText,
+  uiaSetFocusedValue,
   uiaSetFocus
 } from './windows-input.js';
 import { chooseVerifiedChatGptWindow, isChatGptUrl } from './window-targeting.js';
@@ -49,11 +54,8 @@ function enforceDesktopFirstConstraints(args) {
   if (args.attachments?.length) {
     throw new StepError(ERROR_CODES.INVALID_ARGS, 'desktop-constraints', 'Desktop transport does not support --attachment yet. Use submit-browser-chatgpt or --transport=browser.');
   }
-  if (args.mode && args.mode !== 'auto') {
-    throw new StepError(ERROR_CODES.INVALID_ARGS, 'desktop-constraints', 'Desktop transport currently supports only --mode auto. Use submit-browser-chatgpt or --transport=browser for browser-side mode selection.');
-  }
-  if (args.newChat) {
-    throw new StepError(ERROR_CODES.INVALID_ARGS, 'desktop-constraints', 'Desktop transport does not support --new-chat yet. Use submit-browser-chatgpt or --transport=browser.');
+  if (!['auto', 'pro'].includes(args.mode || 'auto')) {
+    throw new StepError(ERROR_CODES.INVALID_ARGS, 'desktop-constraints', 'Desktop transport currently supports only --mode auto or --mode pro. Use submit-browser-chatgpt or --transport=browser for other browser-side mode selection.');
   }
 }
 
@@ -64,12 +66,17 @@ export async function submitDesktopChatgpt(argv = []) {
   let lastFocusedElement = null;
   let clipboardHash = null;
   let logPath = null;
+  let modeResolved = 'auto';
   const notes = [];
 
   try {
     const args = await parseDesktopSubmitArgs(argv);
     enforceDesktopFirstConstraints(args);
+    modeResolved = args.mode || 'auto';
     logPath = defaultLogPath(`desktop-submit-${args.calibrationProfile}`);
+
+    lastStep = 'load-ui-profile';
+    const uiProfile = validateConfig(await loadProfile(args.profile));
 
     lastStep = 'load-calibration-profile';
     const calibration = await loadCalibrationProfile(args.calibrationProfile, {
@@ -82,8 +89,12 @@ export async function submitDesktopChatgpt(argv = []) {
 
     notes.push('transport=desktop');
     notes.push('transportStatus=default');
-    notes.push('fallbackOrder=UIA-composer-only>calibrated-coordinates');
-    notes.push('desktopMode=deterministic-uia-composer-only');
+    notes.push('fallbackOrder=UIA>focus-enter>calibrated-coordinates');
+    notes.push('desktopMode=deterministic-desktop-pro-handoff');
+    notes.push(`profile=${uiProfile.profileName}`);
+    notes.push(`uiTier=${uiProfile.chatgpt?.uiTier || 'unknown'}`);
+    notes.push(`modeResolved=${modeResolved}`);
+    notes.push(`newChat=${args.newChat === true}`);
     notes.push(`calibrationProfile=${args.calibrationProfile}`);
     notes.push(`titleHint=${titleHint}`);
     notes.push(`targetBounds=${targetBounds.x},${targetBounds.y},${targetBounds.width},${targetBounds.height}`);
@@ -92,6 +103,9 @@ export async function submitDesktopChatgpt(argv = []) {
 
     await writeJsonlLog(logPath, {
       step: 'init',
+      profile: args.profile,
+      modeResolved,
+      newChat: args.newChat,
       dryRun: args.dryRun,
       submit: args.submit,
       calibrationProfile: args.calibrationProfile,
@@ -104,7 +118,7 @@ export async function submitDesktopChatgpt(argv = []) {
       notes.push(`promptHash=${hashText(args.prompt)}`);
       return createReceipt({
         submitted: false,
-        modeResolved: 'desktop-chatgpt',
+        modeResolved,
         projectResolved: null,
         url: CHATGPT_URL,
         notes
@@ -162,6 +176,36 @@ export async function submitDesktopChatgpt(argv = []) {
     await delay(args.stepDelayMs);
     await writeJsonlLog(logPath, { step: lastStep });
 
+    if (args.newChat) {
+      lastStep = 'start-new-chat';
+      const newChatResult = await startDesktopNewChat({
+        handle: selectedWindow.handle,
+        stepDelayMs: args.stepDelayMs,
+        calibration,
+        windowBounds: targetBounds,
+        profile: uiProfile
+      });
+      notes.push(`newChatProof=${newChatResult.proof}`);
+      notes.push(`newChatMethod=${newChatResult.method}`);
+      await writeJsonlLog(logPath, { step: lastStep, newChatResult });
+    }
+
+    if (modeResolved !== 'auto') {
+      lastStep = 'select-mode';
+      const modeResult = await selectDesktopMode({
+        handle: selectedWindow.handle,
+        stepDelayMs: args.stepDelayMs,
+        calibration,
+        windowBounds: targetBounds,
+        profile: uiProfile,
+        modeResolved
+      });
+      notes.push(`modeSelectionProof=${modeResult.proof}`);
+      notes.push(`modeSelectionMethod=${modeResult.method}`);
+      notes.push(`modeConfirmed=${modeResult.confirmed !== false}`);
+      await writeJsonlLog(logPath, { step: lastStep, modeResult });
+    }
+
     lastStep = 'focus-prompt';
     const promptFocus = await focusPromptBox(selectedWindow.handle, promptPoint, args.stepDelayMs);
     lastFocusedElement = promptFocus.focusedElement ?? null;
@@ -200,7 +244,7 @@ export async function submitDesktopChatgpt(argv = []) {
       }
       return createReceipt({
         submitted: false,
-        modeResolved: 'desktop-chatgpt',
+        modeResolved,
         projectResolved: null,
         url: currentUrl,
         notes
@@ -208,7 +252,7 @@ export async function submitDesktopChatgpt(argv = []) {
     }
 
     lastStep = 'submit-prompt';
-    const submitResult = await submitPrompt(selectedWindow.handle, submitPoint, args.stepDelayMs, args.prompt, promptFocus, args.submitMethod);
+    const submitResult = await submitPrompt(selectedWindow.handle, submitPoint, args.stepDelayMs, args.prompt, promptFocus, args.submitMethod, validation);
     await writeJsonlLog(logPath, { step: lastStep, submitResult });
     notes.push(`submitMethod=${submitResult.method}`);
     if (submitResult.proof) {
@@ -217,7 +261,7 @@ export async function submitDesktopChatgpt(argv = []) {
 
     return createReceipt({
       submitted: true,
-      modeResolved: 'desktop-chatgpt',
+      modeResolved,
       projectResolved: null,
       url: currentUrl,
       notes
@@ -543,7 +587,45 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
   const beforeSubmitState = await sampleVisibleSubmitState(handle);
 
   try {
-    await refocusComposer(handle, promptFocus, stepDelayMs);
+    const composerTarget = await refocusComposer(handle, promptFocus, stepDelayMs);
+    await clickComposerCenter(composerTarget, pointFromElementRect(composerTarget?.rect));
+    await settleAfterComposerFocus(stepDelayMs);
+    const valueSetResult = await uiaSetFocusedValue(prompt);
+    await settleAfterPaste(stepDelayMs);
+    const directValueMatch = normalizeComposerText(valueSetResult?.text) === prompt;
+    if (directValueMatch) {
+      const visibleProof = await waitForVisibleSendState(handle, prompt, beforeSubmitState, stepDelayMs, 'uia-focus+value-set');
+      return mergePromptInsertionProof({
+        baseMethod: 'uia-focus+value-set',
+        expectedHash,
+        promptProof: {
+          text: prompt,
+          element: valueSetResult?.element || composerTarget || null,
+          focusedElement: valueSetResult?.element || composerTarget || null,
+          proof: 'uia-focus+value-set+focused-value-pattern'
+        },
+        visibleProof,
+        beforeSubmitState
+      });
+    }
+    const valueProof = await waitForPromptPresence(handle, prompt, stepDelayMs, 'uia-focus+value-set');
+    if (valueProof.ok) {
+      const visibleProof = await waitForVisibleSendState(handle, prompt, beforeSubmitState, stepDelayMs, 'uia-focus+value-set');
+      return mergePromptInsertionProof({
+        baseMethod: 'uia-focus+value-set',
+        expectedHash,
+        promptProof: valueProof,
+        visibleProof,
+        beforeSubmitState
+      });
+    }
+  } catch {
+    // fall through to keyboard-style insertion strategies
+  }
+
+  try {
+    const composerTarget = await refocusComposer(handle, promptFocus, stepDelayMs);
+    await clickComposerCenter(composerTarget, pointFromElementRect(composerTarget?.rect));
     await settleAfterComposerFocus(stepDelayMs);
     await clearComposer(stepDelayMs);
     await setClipboardText(prompt);
@@ -557,6 +639,28 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
         baseMethod: 'uia-focus+slow-clipboard-paste',
         expectedHash,
         promptProof: clipboardProof,
+        visibleProof,
+        beforeSubmitState
+      });
+    }
+  } catch {
+    // fall through to the next insertion strategy
+  }
+
+  try {
+    const composerTarget = await refocusComposer(handle, promptFocus, stepDelayMs);
+    await clickComposerCenter(composerTarget, pointFromElementRect(composerTarget?.rect));
+    await settleAfterComposerFocus(stepDelayMs);
+    await clearComposer(stepDelayMs);
+    await sendText(prompt);
+    await settleAfterPaste(stepDelayMs);
+    const typedProof = await waitForPromptPresence(handle, prompt, stepDelayMs, 'uia-focus+unicode-type');
+    if (typedProof.ok) {
+      const visibleProof = await waitForVisibleSendState(handle, prompt, beforeSubmitState, stepDelayMs, 'uia-focus+unicode-type');
+      return mergePromptInsertionProof({
+        baseMethod: 'uia-focus+unicode-type',
+        expectedHash,
+        promptProof: typedProof,
         visibleProof,
         beforeSubmitState
       });
@@ -686,7 +790,6 @@ async function refocusComposer(handle, promptFocus, stepDelayMs) {
     action: async () => {
       await uiaSetFocus({ handle }, {
         automationId: 'prompt-textarea',
-        className: 'ProseMirror',
         timeoutMs: 1800
       }).catch(() => null);
     },
@@ -716,7 +819,10 @@ async function refocusComposer(handle, promptFocus, stepDelayMs) {
 }
 
 async function clearComposer(stepDelayMs) {
-  await sendKeys('a', ['ctrl']);
+  const clearedViaUia = await uiaSetFocusedValue('').then(() => true).catch(() => false);
+  if (!clearedViaUia) {
+    await sendKeys('a', ['ctrl']);
+  }
   await delay(stepDelayMs);
 }
 
@@ -737,13 +843,31 @@ async function clickComposerCenter(element, fallbackPoint) {
   await clickPoint(fallbackPoint);
 }
 
+function pointFromElementRect(rect) {
+  if (!rect?.width || !rect?.height) return null;
+  return {
+    x: rect.x + (rect.width / 2),
+    y: rect.y + (rect.height / 2)
+  };
+}
+
 async function readComposerProof(handle) {
   const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
+
+  if (looksLikeComposerElement(focusedElement)) {
+    const focusedComposer = await uiaReadFocusedText().catch(() => null);
+    if (focusedComposer?.element && looksLikeComposerElement(focusedComposer.element)) {
+      return {
+        element: focusedComposer.element,
+        focusedElement: focusedComposer.element,
+        text: normalizeComposerText(focusedComposer.text)
+      };
+    }
+  }
 
   try {
     const composer = await uiaReadText({ handle }, {
       automationId: 'prompt-textarea',
-      className: 'ProseMirror',
       timeoutMs: 1500
     });
     return {
@@ -757,17 +881,22 @@ async function readComposerProof(handle) {
     }
 
     const priorClipboard = await getClipboardText().catch(() => ({ text: '' }));
+    const sentinel = `__codex_composer_probe_${crypto.randomUUID()}__`;
+    await setClipboardText(sentinel).catch(() => {});
+    await clickComposerCenter(focusedElement, pointFromElementRect(focusedElement?.rect)).catch(() => {});
+    await delay(120);
     await sendKeys('a', ['ctrl']);
     await delay(120);
     await sendKeys('c', ['ctrl']);
     await delay(180);
     const clipboard = await getClipboardText();
     await setClipboardText(String(priorClipboard?.text || '')).catch(() => {});
+    const copiedText = normalizeComposerText(clipboard.text);
 
     return {
       element: focusedElement,
       focusedElement,
-      text: normalizeComposerText(clipboard.text)
+      text: copiedText === sentinel ? '' : copiedText
     };
   }
 }
@@ -782,6 +911,9 @@ async function insertPromptViaCoordinateProof(prompt, stepDelayMs) {
   await delay(stepDelayMs);
   await pasteClipboard();
   await delay(stepDelayMs * 2);
+  const sentinel = `__codex_coordinate_probe_${crypto.randomUUID()}__`;
+  await setClipboardText(sentinel);
+  await delay(stepDelayMs);
   await sendKeys('a', ['ctrl']);
   await delay(stepDelayMs);
   await sendKeys('c', ['ctrl']);
@@ -851,11 +983,11 @@ function looksLikeComposerElement(element) {
     || haystack.includes('메시지');
 }
 
-async function submitPrompt(handle, submitPoint, stepDelayMs, prompt, promptFocus, preferredMethod = 'click') {
+async function submitPrompt(handle, submitPoint, stepDelayMs, prompt, promptFocus, preferredMethod = 'click', validatedInput = null) {
   await focusWindow(handle).catch(() => {});
   await refocusComposer(handle, promptFocus, stepDelayMs).catch(() => {});
   await settleAfterComposerFocus(stepDelayMs);
-  const ready = await verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs);
+  const ready = await verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, validatedInput);
   const before = ready.sample;
   const plannedMethods = buildSubmitAttemptOrder(preferredMethod, before.submitButton);
   let method = null;
@@ -960,11 +1092,21 @@ async function waitForVisibleSendState(handle, prompt, beforeState, stepDelayMs,
 
 async function submitViaVisibleSendButton(handle, submitPoint, stepDelayMs) {
   try {
-    await uiaInvoke({ handle }, { automationId: 'composer-submit-btn', timeoutMs: 1000 });
+    await uiaInvoke({ handle }, { automationId: 'composer-submit-button', timeoutMs: 1000 });
     await delay(stepDelayMs * 2);
     return 'uia-invoke-submit-button';
   } catch {
     try {
+      await uiaInvoke({ handle }, { automationId: 'composer-submit-btn', timeoutMs: 1000 });
+      await delay(stepDelayMs * 2);
+      return 'uia-invoke-submit-button-legacy';
+    } catch {
+      try {
+        await uiaInvoke({ handle }, { name: '프롬프트 보내기', role: 'Button', timeoutMs: 1000 });
+        await delay(stepDelayMs * 2);
+        return 'uia-invoke-submit-button-ko';
+      } catch {
+        try {
       await uiaInvoke({ handle }, { name: 'Send', role: 'Button', timeoutMs: 1000 });
       await delay(stepDelayMs * 2);
       return 'uia-invoke-send-button';
@@ -979,11 +1121,14 @@ async function submitViaVisibleSendButton(handle, submitPoint, stepDelayMs) {
         return 'calibrated-send-button';
       }
     }
+      }
+      }
   }
 }
 
-async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs) {
+async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, validatedInput = null) {
   const currentUrlAfterValidation = await readCurrentUrl(handle).catch(() => CHATGPT_URL);
+  const validatedHashMatched = validatedInput?.actualHash === hashText(prompt);
   return waitForCondition({
     step: 'submit-prompt-precheck',
     attempts: 5,
@@ -1000,6 +1145,7 @@ async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs) {
       });
       const promptPresent = normalizeComposerText(proof.text).includes(prompt);
       const sendable = isSendableSubmitState(submitButton);
+      const validatedReady = validatedHashMatched && Boolean(submitButton);
       const sample = {
         stage: 'before',
         prompt,
@@ -1012,10 +1158,10 @@ async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs) {
         stopButtonEnabled: false
       };
       return {
-        ok: promptPresent,
+        ok: promptPresent || validatedReady,
         proof: promptPresent
           ? (sendable ? 'composerContainsPromptAndSendable' : 'composerContainsPromptSubmitStateDegraded')
-          : 'composerMissingExpectedPrompt',
+          : (validatedReady ? 'validatedInputHashMatchedAndSubmitButtonReady' : 'composerMissingExpectedPrompt'),
         sample
       };
     },
@@ -1082,7 +1228,9 @@ function deriveSubmitProof(before, after, prompt) {
 
 async function findSubmitButton(handle) {
   const candidates = [
+    { automationId: 'composer-submit-button', timeoutMs: 700 },
     { automationId: 'composer-submit-btn', timeoutMs: 700 },
+    { name: '프롬프트 보내기', role: 'Button', timeoutMs: 700 },
     { name: 'Send', role: 'Button', timeoutMs: 700 },
     { name: '보내기', role: 'Button', timeoutMs: 700 }
   ];
@@ -1096,7 +1244,9 @@ async function findSubmitButton(handle) {
 
 async function findStopButton(handle) {
   const candidates = [
+    { automationId: 'composer-submit-button', timeoutMs: 500 },
     { automationId: 'composer-submit-btn', timeoutMs: 500 },
+    { name: '프롬프트 중지', role: 'Button', timeoutMs: 500 },
     { name: 'Stop', role: 'Button', timeoutMs: 500 },
     { name: '중지', role: 'Button', timeoutMs: 500 },
     { name: '응답 중지', role: 'Button', timeoutMs: 500 }
@@ -1188,7 +1338,6 @@ function isLikelyOmniboxElement(element) {
 async function queryComposerElement(handle, timeoutMs = 1200) {
   const result = await uiaQuery({ handle }, {
     automationId: 'prompt-textarea',
-    className: 'ProseMirror',
     timeoutMs
   });
   return result?.element || null;

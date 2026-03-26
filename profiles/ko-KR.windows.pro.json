@@ -55,9 +55,9 @@
     },
     "modeMenu": {
       "entry": {
-        "roles": [{ "role": "button", "name": "최신" }, { "role": "button", "name": "Instant" }, { "role": "button", "name": "Thinking" }, { "role": "button", "name": "Pro" }],
+        "roles": [{ "role": "button", "name": "최신" }, { "role": "button", "name": "최신 모드" }, { "role": "button", "name": "Instant" }, { "role": "button", "name": "Thinking" }, { "role": "button", "name": "Pro" }, { "role": "button", "name": "Pro 확장 모드" }],
         "labels": ["모델 선택", "모델", "Model"],
-        "texts": ["최신", "Instant", "Thinking", "Pro", "구성..."],
+        "texts": ["최신", "최신 모드", "Instant", "Thinking", "Pro", "Pro 확장 모드", "구성..."],
         "selectors": ["button[aria-haspopup='menu']", "button:has-text('최신')", "button:has-text('Instant')", "button:has-text('Thinking')", "button:has-text('Pro')"]
       },
       "options": {
@@ -86,9 +86,9 @@
           "selectors": ["[role='menuitem']:has-text('Thinking')", "[role='option']:has-text('Thinking')"]
         },
         "pro": {
-          "roles": [{ "role": "menuitem", "name": "Pro" }, { "role": "option", "name": "Pro" }],
+          "roles": [{ "role": "menuitem", "name": "Pro" }, { "role": "option", "name": "Pro" }, { "role": "button", "name": "Pro" }, { "role": "button", "name": "Pro 확장 모드" }],
           "labels": ["Pro"],
-          "texts": ["Pro"],
+          "texts": ["Pro", "Pro 확장 모드"],
           "selectors": ["[role='menuitem']:has-text('Pro')", "[role='option']:has-text('Pro')"]
         }
       },

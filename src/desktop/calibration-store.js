@@ -1,9 +1,10 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { StepError, ERROR_CODES } from '../errors.js';
+import { repoRoot } from '../bundle-layout.js';
 import { assertNormalizedPoint, getStandardWindowBounds } from './geometry.js';
 
-const DEFAULT_DIR = path.resolve('profiles', 'desktop');
+const DEFAULT_DIR = path.join(repoRoot, 'profiles', 'desktop');
 
 export function getCalibrationProfilePath(profileName = 'default', baseDir = DEFAULT_DIR) {
   if (!profileName || /[\\/]/.test(profileName)) {

@@ -1,5 +1,5 @@
 import { StepError } from '../errors.js';
-import { getUrlViaOmnibox, listChromeWindows, uiaQuery } from './windows-input.js';
+import { focusWindow, getUrlViaOmnibox, listChromeWindows, uiaQuery } from './windows-input.js';
 
 const CHATGPT_HOST = 'chatgpt.com';
 
@@ -87,7 +87,11 @@ async function readComposerElement(handle) {
   }
 }
 
-export async function inspectWindowTargetEvidence(window) {
+export async function inspectWindowTargetEvidence(window, options = {}) {
+  if (options.focusFirst) {
+    await focusWindow(window.handle).catch(() => null);
+  }
+
   const [url, composerElement] = await Promise.all([
     readWindowUrl(window.handle),
     readComposerElement(window.handle)
@@ -117,6 +121,20 @@ export async function chooseVerifiedChatGptWindow(titleHint = '') {
       selectedWindow: winner.window,
       evidence: winner,
       candidates: scored
+    };
+  }
+
+  const focusedCandidates = [];
+  for (const window of windows) {
+    focusedCandidates.push(await inspectWindowTargetEvidence(window, { focusFirst: true }));
+  }
+
+  const focusedPass = pickBestCredibleWindowCandidate(focusedCandidates, titleHint);
+  if (focusedPass.winner) {
+    return {
+      selectedWindow: focusedPass.winner.window,
+      evidence: focusedPass.winner,
+      candidates: focusedPass.scored
     };
   }
 

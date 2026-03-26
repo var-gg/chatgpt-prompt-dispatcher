@@ -13,7 +13,7 @@ test('submitChatgpt defaults to desktop transport and returns a dry-run receipt'
   ]);
 
   assert.equal(receipt.submitted, false);
-  assert.equal(receipt.modeResolved, 'desktop-chatgpt');
+  assert.equal(receipt.modeResolved, 'auto');
   assert.equal(receipt.projectResolved, null);
   assert.ok(Array.isArray(receipt.notes));
   assert.ok(receipt.notes.includes('transport=desktop'));

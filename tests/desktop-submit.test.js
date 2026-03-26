@@ -11,6 +11,7 @@ const {
   deriveSubmitProof,
   hasVisibleSendStateTransition,
   buildSubmitAttemptOrder,
+  looksLikeStopButton,
   hashText,
   normalizeAddressValue,
   isRectClose
@@ -157,6 +158,20 @@ test('deriveSubmitProof prefers strong post-submit UI signals', () => {
     { composerText: 'hello', submitButton: { name: 'Send', isEnabled: false }, stopButton: null },
     'hello'
   ), 'submitButtonStateChanged');
+});
+
+test('looksLikeStopButton distinguishes streaming stop state from send state', () => {
+  assert.equal(looksLikeStopButton({
+    name: '응답 중지',
+    automationId: 'composer-submit-button',
+    className: 'composer-submit-btn'
+  }), true);
+
+  assert.equal(looksLikeStopButton({
+    name: '프롬프트 보내기',
+    automationId: 'composer-submit-button',
+    className: 'composer-submit-btn'
+  }), false);
 });
 
 test('normalizeAddressValue canonicalizes chatgpt URLs for omnibox verification', () => {

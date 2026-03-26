@@ -1,0 +1,3 @@
+display_name: ChatGPT Pro Handoff
+short_description: Build a strong prompt from the current task and submit it to a visible ChatGPT Pro desktop session on Windows.
+default_prompt: Draft the best possible ChatGPT Pro prompt for this task, then run the local Pro handoff workflow and return only the submission receipt.

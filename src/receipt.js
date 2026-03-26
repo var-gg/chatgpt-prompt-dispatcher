@@ -19,7 +19,7 @@ export function createReceipt({
   debugArtifacts = null,
   notes = []
 }) {
-  return {
+  const receipt = {
     submitted,
     timestamp: new Date().toISOString(),
     modeResolved,
@@ -41,6 +41,8 @@ export function createReceipt({
     debugArtifacts,
     notes
   };
+  assertSuccessReceiptInvariant(receipt);
+  return receipt;
 }
 
 export function createFailureReceipt({
@@ -87,4 +89,32 @@ export function createFailureReceipt({
     debugArtifacts,
     notes
   };
+}
+
+export function assertSuccessReceiptInvariant(receipt = {}) {
+  if (receipt?.submitted !== true) {
+    return receipt;
+  }
+
+  if (receipt?.proofLevel !== 'strict') {
+    return receipt;
+  }
+
+  if (receipt?.finalAction !== 'submitted-confirmed') {
+    throw new Error('Strict success receipts must use finalAction="submitted-confirmed".');
+  }
+  if (!String(receipt?.conversationUrl || '').trim()) {
+    throw new Error('Strict success receipts must include conversationUrl.');
+  }
+  if (!String(receipt?.screenshotPath || '').trim()) {
+    throw new Error('Strict success receipts must include screenshotPath.');
+  }
+  if (receipt?.submitAttempted !== true) {
+    throw new Error('Strict success receipts must record submitAttempted=true.');
+  }
+  if (receipt?.failureClass || receipt?.failureReason || receipt?.error) {
+    throw new Error('Strict success receipts cannot include failure metadata.');
+  }
+
+  return receipt;
 }

@@ -194,6 +194,7 @@ test('selectDesktopMode clicks queried option when invoke and focus fail', async
     windowBounds: createCalibration().window.targetBounds,
     profile: createProfile(),
     modeResolved: 'pro',
+    allowPointClick: true,
     deps: {
       async clickPoint(point) { clicks.push(point); },
       async delay() {},
@@ -228,6 +229,70 @@ test('selectDesktopMode clicks queried option when invoke and focus fail', async
   assert.equal(clicks.length >= 2, true);
   assert.match(result.method, /uiaQueryClick/);
   assert.equal(result.proof, 'modeActivatedAndConfirmed');
+});
+
+test('selectDesktopMode fails closed when activation cannot be confirmed', async () => {
+  await assert.rejects(async () => {
+    await selectDesktopMode({
+      handle: 1,
+      stepDelayMs: 0,
+      calibration: createCalibration(),
+      windowBounds: createCalibration().window.targetBounds,
+      profile: createProfile(),
+      modeResolved: 'pro',
+      deps: {
+        async clickPoint() { throw new Error('click fallback should not run'); },
+        async delay() {},
+        async pressEnter() {},
+        async uiaElementFromPoint() { throw new Error('no scan'); },
+        async uiaInvoke() {
+          throw new Error('invoke unavailable');
+        },
+        async uiaQuery(_target, query) {
+          if (query.automationId === 'prompt-textarea') {
+            return { element: { rect: { x: 472, y: 877, width: 584, height: 33 } } };
+          }
+          throw new Error('not confirmed');
+        },
+        async uiaSetFocus(_target, query) {
+          if (query.name === 'Pro') return { element: { name: 'Pro' } };
+          throw new Error('not found');
+        }
+      }
+    });
+  }, (error) => {
+    assert.equal(error instanceof StepError, true);
+    assert.equal(error.code, 'MODE_SELECTION_FAILED');
+    assert.match(error.message, /could not be confirmed/i);
+    return true;
+  });
+});
+
+test('selectDesktopMode does not use blind coordinate fallback by default', async () => {
+  await assert.rejects(async () => {
+    await selectDesktopMode({
+      handle: 1,
+      stepDelayMs: 0,
+      calibration: createCalibration(),
+      windowBounds: createCalibration().window.targetBounds,
+      profile: createProfile(),
+      modeResolved: 'pro',
+      deps: {
+        async clickPoint() { throw new Error('should not click'); },
+        async delay() {},
+        async pressEnter() {},
+        async uiaElementFromPoint() { throw new Error('no scan'); },
+        async uiaInvoke() { throw new Error('no invoke'); },
+        async uiaQuery() { throw new Error('no query'); },
+        async uiaSetFocus() { throw new Error('no focus'); }
+      }
+    });
+  }, (error) => {
+    assert.equal(error instanceof StepError, true);
+    assert.equal(error.code, 'MODE_SELECTION_FAILED');
+    assert.match(error.message, /without mouse-coordinate fallback/i);
+    return true;
+  });
 });
 
 test('selectDesktopMode fails when option activation is unavailable', async () => {

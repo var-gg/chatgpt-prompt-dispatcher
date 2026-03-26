@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createReceipt, createFailureReceipt } from '../src/receipt.js';
+import { assertSuccessReceiptInvariant, createReceipt, createFailureReceipt } from '../src/receipt.js';
 
 test('createReceipt returns submission metadata only', () => {
   const receipt = createReceipt({
@@ -78,4 +78,30 @@ test('createFailureReceipt includes error metadata', () => {
   assert.equal(receipt.failureReason, 'bad');
   assert.equal(receipt.finalAction, 'submit-withheld');
   assert.equal(receipt.debugArtifacts.validationProof, 'composerVisualStillPlaceholder');
+});
+
+test('strict success receipts enforce invariants', () => {
+  assert.throws(() => createReceipt({
+    submitted: true,
+    modeResolved: 'pro',
+    projectResolved: null,
+    url: 'https://chatgpt.com/',
+    proofLevel: 'strict',
+    finalAction: 'submitted-confirmed',
+    screenshotPath: null,
+    conversationUrl: null,
+    submitAttempted: false,
+    notes: []
+  }), /Strict success receipts must include conversationUrl/);
+
+  assert.doesNotThrow(() => assertSuccessReceiptInvariant({
+    submitted: true,
+    proofLevel: 'strict',
+    finalAction: 'submitted-confirmed',
+    conversationUrl: 'https://chatgpt.com/c/abc',
+    screenshotPath: 'shot.png',
+    submitAttempted: true,
+    failureClass: null,
+    failureReason: null
+  }));
 });

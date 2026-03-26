@@ -110,6 +110,8 @@ export async function selectDesktopMode({
   windowBounds,
   profile,
   modeResolved,
+  allowPointClick = false,
+  allowAnchorFallback = false,
   deps = DEFAULT_DEPS
 }) {
   if (!modeResolved || modeResolved === 'auto') {
@@ -146,21 +148,29 @@ export async function selectDesktopMode({
     ...buildQueriesFromNames(MODE_ENTRY_LABELS, 'Button')
   ];
 
-  let openMenu = await tryActivateQueries(handle, menuQueries, stepDelayMs, deps);
+  let openMenu = await tryActivateQueries(handle, menuQueries, stepDelayMs, deps, {
+    allowPointClick
+  });
   if (!openMenu) {
-    if (selectedModeControl?.clickPoint) {
+    if (allowPointClick && selectedModeControl?.clickPoint) {
       await deps.clickPoint(selectedModeControl.clickPoint);
       await deps.delay(stepDelayMs);
       openMenu = {
         method: selectedModeControl.method
       };
-    } else {
+    } else if (allowAnchorFallback) {
       const fallbackPoint = resolveAnchorPoint(calibration, 'modeButton', windowBounds);
       await deps.clickPoint(fallbackPoint);
       await deps.delay(stepDelayMs);
       openMenu = {
         method: 'coordinateClick:modeButton'
       };
+    } else {
+      throw new StepError(
+        ERROR_CODES.MODE_SELECTION_FAILED,
+        'select-mode',
+        `Could not open mode "${modeResolved}" without mouse-coordinate fallback.`
+      );
     }
   }
 
@@ -168,7 +178,8 @@ export async function selectDesktopMode({
     handle,
     buildModeOptionQueries(plan.modeOptionCandidates, modeResolved),
     stepDelayMs,
-    deps
+    deps,
+    { allowPointClick }
   );
 
   let overflowActivation = null;
@@ -177,14 +188,16 @@ export async function selectDesktopMode({
       handle,
       buildQueriesFromCandidates(plan.modeOverflowCandidates, 'MenuItem'),
       stepDelayMs,
-      deps
+      deps,
+      { allowPointClick }
     );
     if (overflowActivation) {
       optionActivation = await tryActivateQueries(
         handle,
         buildModeOptionQueries(plan.modeOptionCandidates, modeResolved),
         stepDelayMs,
-        deps
+        deps,
+        { allowPointClick }
       );
     }
   }
@@ -210,10 +223,24 @@ export async function selectDesktopMode({
   if (overflowActivation) methodParts.push(overflowActivation.method);
   methodParts.push(optionActivation.method);
 
+  if (!confirmed) {
+    throw new StepError(
+      ERROR_CODES.MODE_SELECTION_FAILED,
+      'select-mode',
+      `Mode "${modeResolved}" activation could not be confirmed after UIA interaction.`,
+      {
+        modeResolved,
+        openMenuMethod: openMenu.method,
+        optionMethod: optionActivation.method,
+        overflowMethod: overflowActivation?.method || null
+      }
+    );
+  }
+
   return {
     method: methodParts.join('>'),
-    proof: confirmed ? 'modeActivatedAndConfirmed' : 'modeActivatedUnconfirmed',
-    confirmed
+    proof: 'modeActivatedAndConfirmed',
+    confirmed: true
   };
 }
 
@@ -267,7 +294,8 @@ export function normalizeUiaRole(value) {
   return ROLE_MAP[normalized] || raw;
 }
 
-async function tryActivateQueries(handle, queries, stepDelayMs, deps) {
+async function tryActivateQueries(handle, queries, stepDelayMs, deps, options = {}) {
+  const allowPointClick = options.allowPointClick === true;
   for (const query of dedupeQueries(queries)) {
     const invokeQuery = { ...query, timeoutMs: 900 };
     try {
@@ -288,16 +316,18 @@ async function tryActivateQueries(handle, queries, stepDelayMs, deps) {
       // Try the next query.
     }
 
-    try {
-      const queried = await deps.uiaQuery({ handle }, invokeQuery);
-      const point = centerPointFromRect(queried?.element?.rect);
-      if (point) {
-        await deps.clickPoint(point);
-        await deps.delay(stepDelayMs);
-        return { method: `uiaQueryClick:${describeQuery(query)}` };
+    if (allowPointClick) {
+      try {
+        const queried = await deps.uiaQuery({ handle }, invokeQuery);
+        const point = centerPointFromRect(queried?.element?.rect);
+        if (point) {
+          await deps.clickPoint(point);
+          await deps.delay(stepDelayMs);
+          return { method: `uiaQueryClick:${describeQuery(query)}` };
+        }
+      } catch {
+        // Try the next query.
       }
-    } catch {
-      // Try the next query.
     }
   }
 

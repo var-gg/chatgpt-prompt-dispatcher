@@ -38,6 +38,8 @@ test('parseDesktopSubmitArgs accepts desktop-specific flags', async () => {
     '--window-title', 'ChatGPT',
     '--step-delay-ms', '250',
     '--submit-method', 'enter',
+    '--allow-recovery',
+    '--allow-mode-anchor-fallback',
     '--no-submit'
   ]);
 
@@ -50,5 +52,7 @@ test('parseDesktopSubmitArgs accepts desktop-specific flags', async () => {
   assert.equal(result.windowTitle, 'ChatGPT');
   assert.equal(result.stepDelayMs, 250);
   assert.equal(result.submitMethod, 'enter');
+  assert.equal(result.allowRecovery, true);
+  assert.equal(result.allowModeAnchorFallback, true);
   assert.equal(result.submit, false);
 });

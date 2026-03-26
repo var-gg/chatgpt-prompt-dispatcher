@@ -382,7 +382,9 @@ export async function submitDesktopChatgpt(argv = []) {
         calibration,
         windowBounds: targetBounds,
         profile: uiProfile,
-        modeResolved
+        modeResolved,
+        allowPointClick: false,
+        allowAnchorFallback: args.allowModeAnchorFallback === true
       });
       notes.push(`modeSelectionProof=${modeResult.proof}`);
       notes.push(`modeSelectionMethod=${modeResult.method}`);
@@ -403,6 +405,21 @@ export async function submitDesktopChatgpt(argv = []) {
       notes.push(`composerReadiness=${promptFocus.readinessProof}`);
     }
     await logSubmitEvent({ step: lastStep, promptFocus });
+
+    if (proofLevel === 'strict') {
+      lastStep = 'capture-strict-baseline';
+      await syncAutomationContext(lastStep);
+      strictPreSubmitBaseline = await capturePassiveStrictPreSubmitBaseline({
+        handle: selectedWindow.handle,
+        currentUrl,
+        screenshotPath,
+        stepDelayMs: args.stepDelayMs
+      });
+      capturedScreenshotPath = strictPreSubmitBaseline.screenshotPath || capturedScreenshotPath;
+      notes.push(`strictPreSubmit=${strictPreSubmitBaseline.proof}`);
+      notes.push(`strictPreSubmitTitle=${strictPreSubmitBaseline.windowTitle}`);
+      await logSubmitEvent({ step: lastStep, strictPreSubmitBaseline });
+    }
 
     if (isLongPrompt(prompt)) {
       lastStep = 'capture-composer-baseline';
@@ -432,18 +449,23 @@ export async function submitDesktopChatgpt(argv = []) {
 
     lastStep = 'validate-prompt';
     await syncAutomationContext(lastStep);
-    validation = await validatePromptInput(
-      selectedWindow.handle,
-      prompt,
-      promptFocus,
-      insertion,
-      args.stepDelayMs,
-      {
-        screenshotPath,
-        windowRect: lastWindow?.rect || null,
-        baseline: composerVisualBaseline
+    try {
+      validation = await validatePromptInput(
+        selectedWindow.handle,
+        prompt,
+        promptFocus,
+        insertion,
+        args.stepDelayMs,
+        {
+          screenshotPath,
+          windowRect: lastWindow?.rect || null,
+          baseline: composerVisualBaseline
+        }
+      );
+    } catch (validationError) {
+      if (!args.allowRecovery) {
+        throw validationError;
       }
-    ).catch(async (validationError) => {
       attemptCount = Math.max(attemptCount, 2);
       currentAttemptIndex = 2;
       const recovery = await attemptBoundedVisiblePasteRecovery({
@@ -467,8 +489,8 @@ export async function submitDesktopChatgpt(argv = []) {
       finalAction = 'submit-withheld';
       notes.push('selfHealRetry=1');
       notes.push(`retryRecoveryProof=${recovery.validation.proof}`);
-      return recovery.validation;
-    });
+      validation = recovery.validation;
+    }
     clipboardHash = validation.clipboardHash;
     lastFocusedElement = validation.focusedElement ?? lastFocusedElement;
     attemptCount = Math.max(attemptCount, validation.recoveryTriggered ? 2 : 1);
@@ -513,33 +535,23 @@ export async function submitDesktopChatgpt(argv = []) {
       }));
     }
 
-    if (proofLevel === 'strict') {
-      lastStep = 'strict-pre-submit-baseline';
-      await syncAutomationContext(lastStep);
-      strictPreSubmitBaseline = await collectStrictPreSubmitBaseline({
-        handle: selectedWindow.handle,
-        currentUrl,
-        screenshotPath,
-        stepDelayMs: args.stepDelayMs
-      });
-      currentUrl = strictPreSubmitBaseline.currentUrl || currentUrl;
-      capturedScreenshotPath = strictPreSubmitBaseline.screenshotPath || capturedScreenshotPath;
-      notes.push(`strictPreSubmit=${strictPreSubmitBaseline.proof}`);
-      notes.push(`strictPreSubmitTitle=${strictPreSubmitBaseline.windowTitle}`);
-      await logSubmitEvent({ step: lastStep, strictPreSubmitBaseline });
-    }
-
     lastStep = 'submit-prompt';
     await syncAutomationContext(lastStep, 'submit-attempt');
-    const submitResult = await submitPrompt(
-      selectedWindow.handle,
-      submitPoint,
-      args.stepDelayMs,
-      prompt,
-      promptFocus,
-      args.submitMethod,
-      validation
-    ).catch(async (submitError) => {
+    let submitResult;
+    try {
+      submitResult = await submitPrompt(
+        selectedWindow.handle,
+        submitPoint,
+        args.stepDelayMs,
+        prompt,
+        promptFocus,
+        args.submitMethod,
+        validation
+      );
+    } catch (submitError) {
+      if (!args.allowRecovery) {
+        throw submitError;
+      }
       attemptCount = Math.max(attemptCount, 2);
       currentAttemptIndex = 2;
       const recovery = await attemptBoundedVisiblePasteRecovery({
@@ -566,22 +578,9 @@ export async function submitDesktopChatgpt(argv = []) {
       if (validation.debugArtifacts) {
         debugArtifacts = mergeDebugArtifacts(debugArtifacts, validation.debugArtifacts);
       }
-      if (proofLevel === 'strict') {
-        lastStep = 'strict-pre-submit-baseline';
-        await syncAutomationContext(lastStep);
-        strictPreSubmitBaseline = await collectStrictPreSubmitBaseline({
-          handle: selectedWindow.handle,
-          currentUrl,
-          screenshotPath,
-          stepDelayMs: args.stepDelayMs
-        });
-        currentUrl = strictPreSubmitBaseline.currentUrl || currentUrl;
-        capturedScreenshotPath = strictPreSubmitBaseline.screenshotPath || capturedScreenshotPath;
-        await logSubmitEvent({ step: lastStep, strictPreSubmitBaseline, attemptIndex: currentAttemptIndex });
-      }
       lastStep = 'submit-prompt';
       await syncAutomationContext(lastStep, 'submit-attempt');
-      return submitPrompt(
+      submitResult = await submitPrompt(
         selectedWindow.handle,
         submitPoint,
         args.stepDelayMs,
@@ -590,7 +589,7 @@ export async function submitDesktopChatgpt(argv = []) {
         'enter',
         validation
       );
-    });
+    }
     submitAttempted = Boolean(submitResult?.submitAttempted);
     submitAttemptMethod = submitResult?.method || null;
     finalAction = submitAttemptMethod === 'enter'
@@ -913,6 +912,50 @@ async function collectStrictPreSubmitBaseline({
       'Strict proof baseline did not confirm a fresh ChatGPT home surface before submit.',
       {
         observedUrl,
+        currentUrl,
+        windowTitle,
+        ocrTextSample: ocrText.slice(0, 240),
+        screenshotPath: screenshotCapture.screenshotPath,
+        assessment
+      }
+    );
+  }
+
+  return {
+    ...assessment,
+    currentUrl: assessment.currentUrl || currentUrl || CHATGPT_URL,
+    windowTitle,
+    screenshotPath: screenshotCapture.screenshotPath,
+    screenshotHash,
+    rect: screenshotCapture.rect || null,
+    ocrTextSample: ocrText.slice(0, 240)
+  };
+}
+
+async function capturePassiveStrictPreSubmitBaseline({
+  handle,
+  currentUrl,
+  screenshotPath,
+  stepDelayMs
+}) {
+  const windowTitle = await readWindowTitle(handle).catch(() => '');
+  const baselineScreenshotPath = resolveStrictBaselineScreenshotPath(screenshotPath);
+  const screenshotCapture = await captureStrictProofScreenshot(handle, baselineScreenshotPath, stepDelayMs);
+  const screenshotHash = await hashFile(screenshotCapture.screenshotPath).catch(() => '');
+  const ocrResult = await ocrImageText(screenshotCapture.screenshotPath).catch(() => ({ text: '' }));
+  const ocrText = String(ocrResult?.text || '');
+  const assessment = assessStrictPreSubmitSurface({
+    currentUrl: currentUrl || CHATGPT_URL,
+    windowTitle,
+    ocrText
+  });
+
+  if (!assessment.ok) {
+    throw new StepError(
+      ERROR_CODES.STRICT_PROOF_FAILED,
+      'capture-strict-baseline',
+      'Strict proof baseline did not confirm a fresh ChatGPT home surface before prompt insertion.',
+      {
         currentUrl,
         windowTitle,
         ocrTextSample: ocrText.slice(0, 240),
@@ -2321,7 +2364,7 @@ function phaseForDesktopStep(step = '') {
   if (['focus-prompt', 'capture-composer-baseline', 'refocus-composer'].includes(value)) return 'prompt-focus';
   if (['insert-prompt'].includes(value)) return 'prompt-insert';
   if (['validate-prompt', 'bounded-submit-recovery'].includes(value)) return 'prompt-validate';
-  if (['strict-pre-submit-baseline', 'submit-prompt-precheck'].includes(value)) return 'submit-gate';
+  if (['capture-strict-baseline', 'strict-pre-submit-baseline', 'submit-prompt-precheck'].includes(value)) return 'submit-gate';
   if (['submit-prompt', 'visible-send-state'].includes(value)) return 'submit-attempt';
   if (['strict-submit-proof', 'capture-screenshot'].includes(value)) return 'strict-proof';
   if (value === 'failure') return 'failure';
@@ -2690,7 +2733,6 @@ async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, val
     };
   }
 
-  const currentUrlAfterValidation = await readCurrentUrl(handle).catch(() => CHATGPT_URL);
   return waitForCondition({
     step: 'submit-prompt-precheck',
     attempts: 5,
@@ -2713,7 +2755,7 @@ async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, val
       ensurePromptTargetLooksCredible({
         promptFocus,
         focusedElement: proof.focusedElement,
-        currentUrlAfterValidation,
+        currentUrlAfterValidation: CHATGPT_URL,
         prompt,
         actualHash: hashText(proof.text)
       });

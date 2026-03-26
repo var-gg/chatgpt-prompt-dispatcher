@@ -24,6 +24,8 @@ function parseCommonArgs(argv = [], options = {}) {
     stepDelayMs: 150,
     submit: true,
     submitMethod: 'enter',
+    allowRecovery: false,
+    allowModeAnchorFallback: false,
     ...options
   };
 
@@ -102,6 +104,12 @@ function parseCommonArgs(argv = [], options = {}) {
       case '--submit-method':
         parsed.submitMethod = consumeValue(argv, i, token);
         i += 1;
+        break;
+      case '--allow-recovery':
+        parsed.allowRecovery = true;
+        break;
+      case '--allow-mode-anchor-fallback':
+        parsed.allowModeAnchorFallback = true;
         break;
       case '--no-submit':
         parsed.submit = false;

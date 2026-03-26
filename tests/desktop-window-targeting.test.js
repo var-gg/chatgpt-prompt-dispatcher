@@ -6,6 +6,8 @@ const {
   isChatGptUrl,
   isChatGptTitle,
   isExactChatGptShellTitle,
+  isBlankBrowserShellTitle,
+  isSafeFallbackBrowserWindow,
   scoreWindowTargetEvidence,
   pickBestCredibleWindowCandidate,
   pickFallbackBrowserWindow
@@ -29,6 +31,13 @@ test('isExactChatGptShellTitle detects generic ChatGPT browser shell windows', (
   assert.equal(isExactChatGptShellTitle('ChatGPT - Chrome'), true);
   assert.equal(isExactChatGptShellTitle('ChatGPT - Google Chrome'), true);
   assert.equal(isExactChatGptShellTitle('Notes mentioning chatgpt - Chrome'), false);
+});
+
+test('isBlankBrowserShellTitle detects safe empty browser shells only', () => {
+  assert.equal(isBlankBrowserShellTitle('about:blank - Chrome'), true);
+  assert.equal(isBlankBrowserShellTitle('새 탭 - Chrome'), true);
+  assert.equal(isBlankBrowserShellTitle('New Tab - Chrome'), true);
+  assert.equal(isBlankBrowserShellTitle('2026년 4월 나스닥 전망 - Chrome'), false);
 });
 
 test('scoreWindowTargetEvidence does not treat omnibox echo as credible url evidence', () => {
@@ -98,7 +107,13 @@ test('pickBestCredibleWindowCandidate rejects generic chrome windows when no cre
   assert.deepEqual(scored, []);
 });
 
-test('pickFallbackBrowserWindow still returns a usable browser window when no ChatGPT evidence exists', () => {
+test('isSafeFallbackBrowserWindow only accepts chatgpt or blank browser shells', () => {
+  assert.equal(isSafeFallbackBrowserWindow({ title: 'ChatGPT - Chrome' }, 'ChatGPT'), true);
+  assert.equal(isSafeFallbackBrowserWindow({ title: 'about:blank - Chrome' }, 'ChatGPT'), true);
+  assert.equal(isSafeFallbackBrowserWindow({ title: '2026년 4월 나스닥 전망 - Chrome' }, 'ChatGPT'), false);
+});
+
+test('pickFallbackBrowserWindow prefers a blank shell over unrelated windows when no ChatGPT evidence exists', () => {
   const winner = pickFallbackBrowserWindow([
     { handle: 1, title: 'Docs - Google Chrome' },
     { handle: 2, title: 'about:blank - Chrome' }
@@ -115,4 +130,13 @@ test('pickFallbackBrowserWindow prefers an existing ChatGPT-looking browser wind
   ], 'Chrome');
 
   assert.equal(winner.handle, 2);
+});
+
+test('pickFallbackBrowserWindow rejects unrelated titled tabs when no safe fallback exists', () => {
+  const winner = pickFallbackBrowserWindow([
+    { handle: 1, title: 'Docs - Google Chrome' },
+    { handle: 2, title: '2026년 4월 나스닥 전망 - Chrome' }
+  ], 'ChatGPT');
+
+  assert.equal(winner, null);
 });

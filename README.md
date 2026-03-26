@@ -36,6 +36,7 @@ Receipt semantics:
 - non-elevated browser and non-elevated dispatcher runtime
 - clipboard access allowed
 - existing manual ChatGPT login
+- keep a visible ChatGPT tab/window, or a blank/new browser shell that can be safely navigated to ChatGPT
 
 ## Repo URL Quickstart
 

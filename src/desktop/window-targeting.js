@@ -1,7 +1,9 @@
 import { StepError } from '../errors.js';
-import { focusWindow, getUrlViaOmnibox, listChromeWindows, uiaQuery } from './windows-input.js';
+import { delay, focusWindow, getUrlViaOmnibox, listChromeWindows, uiaQuery } from './windows-input.js';
 
 const CHATGPT_HOST = 'chatgpt.com';
+const WINDOW_FOCUS_SETTLE_MS = 220;
+const WINDOW_EVIDENCE_RETRY_MS = 260;
 
 export function isChatGptUrl(url) {
   try {
@@ -75,27 +77,45 @@ async function readWindowUrl(handle) {
 }
 
 async function readComposerElement(handle) {
-  try {
-    const result = await uiaQuery({ handle }, {
-      automationId: 'prompt-textarea',
-      className: 'ProseMirror',
-      timeoutMs: 700
-    });
-    return result?.element || null;
-  } catch {
-    return null;
+  const queries = [
+    { automationId: 'prompt-textarea', timeoutMs: 900 },
+    { automationId: 'prompt-textarea', className: 'ProseMirror', timeoutMs: 500 },
+    { automationId: 'prompt-textarea', className: 'ProseMirror ProseMirror-focused', timeoutMs: 500 }
+  ];
+
+  for (const query of queries) {
+    try {
+      const result = await uiaQuery({ handle }, query);
+      if (result?.element) {
+        return result.element;
+      }
+    } catch {
+      // try the next prompt-textarea variant
+    }
   }
+
+  return null;
 }
 
 export async function inspectWindowTargetEvidence(window, options = {}) {
   if (options.focusFirst) {
     await focusWindow(window.handle).catch(() => null);
+    await delay(options.focusSettleMs ?? WINDOW_FOCUS_SETTLE_MS);
   }
 
-  const [url, composerElement] = await Promise.all([
+  const firstPass = await Promise.all([
     readWindowUrl(window.handle),
     readComposerElement(window.handle)
   ]);
+  let [url, composerElement] = firstPass;
+
+  if (!url && !composerElement && options.focusFirst) {
+    await delay(options.retryDelayMs ?? WINDOW_EVIDENCE_RETRY_MS);
+    [url, composerElement] = await Promise.all([
+      readWindowUrl(window.handle),
+      readComposerElement(window.handle)
+    ]);
+  }
 
   return {
     window,
@@ -140,9 +160,15 @@ export async function chooseVerifiedChatGptWindow(titleHint = '') {
 
   const fallbackWindow = pickFallbackBrowserWindow(windows, titleHint);
   if (!fallbackWindow) {
-    throw new StepError('CHATGPT_TARGET_NOT_FOUND', 'select-window', 'No Chrome/Edge window was suitable for ChatGPT navigation.', {
+    throw new StepError('CHATGPT_TARGET_NOT_FOUND', 'select-window', 'No credible ChatGPT browser window was found. Open an existing ChatGPT tab/window first, then retry.', {
       titleHint,
-      windows: windows.map((window) => ({ handle: window.handle, title: window.title }))
+      windows: windows.map((window) => ({ handle: window.handle, title: window.title })),
+      candidates: focusedCandidates.map((candidate) => ({
+        handle: candidate.window?.handle,
+        title: candidate.window?.title,
+        url: candidate.url,
+        composerMatched: Boolean(candidate.composerElement)
+      }))
     });
   }
 
@@ -168,12 +194,15 @@ function pickFallbackBrowserWindow(windows, titleHint = '') {
   const scored = windows
     .map((window, index) => {
       const title = String(window?.title || '').toLowerCase();
+      const safe = isSafeFallbackBrowserWindow(window, titleHint);
       let score = 0;
       if (normalizedHint && title.includes(normalizedHint)) score += 50;
       if (title.includes('chatgpt')) score += 100;
-      if (title.includes('new tab') || title.includes('새 탭') || title.includes('about:blank')) score += 20;
-      return { window, score, index };
+      if (isExactChatGptShellTitle(window?.title)) score += 140;
+      if (isBlankBrowserShellTitle(window?.title)) score += 40;
+      return { window, score, index, safe };
     })
+    .filter((entry) => entry.safe)
     .sort((left, right) => right.score - left.score || left.index - right.index);
   return scored[0]?.window || null;
 }
@@ -185,10 +214,29 @@ function isExactChatGptShellTitle(title) {
     || normalized === 'chatgpt - microsoft edge';
 }
 
+function isBlankBrowserShellTitle(title) {
+  const normalized = String(title || '').trim().toLowerCase();
+  return normalized.includes('new tab')
+    || normalized.includes('새 탭')
+    || normalized.includes('about:blank');
+}
+
+function isSafeFallbackBrowserWindow(window, titleHint = '') {
+  const title = String(window?.title || '');
+  const safeTitleHint = String(titleHint || '').toLowerCase().includes('chatgpt')
+    ? titleHint
+    : '';
+  return isExactChatGptShellTitle(title)
+    || isBlankBrowserShellTitle(title)
+    || isChatGptTitle(title, safeTitleHint);
+}
+
 export const __windowTargetingInternals = {
   isChatGptUrl,
   isChatGptTitle,
   isExactChatGptShellTitle,
+  isBlankBrowserShellTitle,
+  isSafeFallbackBrowserWindow,
   scoreWindowTargetEvidence,
   pickBestCredibleWindowCandidate,
   pickFallbackBrowserWindow

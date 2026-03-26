@@ -3,6 +3,7 @@ import {
   getForegroundWindow,
   getWindowRect,
   uiaGetFocusedElement,
+  uiaQuery,
   uiaQueryByNameRole,
   waitForWindow
 } from './windows-input.js';
@@ -29,7 +30,9 @@ export async function inspectDesktopChatgpt(argv = []) {
     const url = selection.evidence?.url ? { url: selection.evidence.url } : { url: '' };
     const rect = await getWindowRect(target.handle).catch((error) => ({ error: { code: error.code, message: error.message } }));
     const focusedElement = await uiaGetFocusedElement().catch((error) => ({ error: { code: error.code, message: error.message } }));
-    const promptCandidate = await uiaQueryByNameRole({ handle: target.handle }, { role: 'Edit', timeoutMs: 500 }).catch((error) => ({ error: { code: error.code, message: error.message } }));
+    const promptCandidate = await uiaQuery({ handle: target.handle }, { automationId: 'prompt-textarea', timeoutMs: 800 })
+      .catch(() => uiaQueryByNameRole({ handle: target.handle }, { role: 'Edit', timeoutMs: 500 }))
+      .catch((error) => ({ error: { code: error.code, message: error.message } }));
     const snapshot = await getDesktopWorkerClient()
       .call('uiaSnapshot', { handle: target.handle, depth: options.depth }, { step: 'desktop-uia-snapshot', timeoutMs: 8000 })
       .catch((error) => ({ error: { code: error.code, message: error.message } }));

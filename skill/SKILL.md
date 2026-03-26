@@ -31,6 +31,7 @@ Do not:
 - Assume the runtime should **open a dedicated fresh browser window** instead of reusing the old conversation window
 - Assume the flow should **submit immediately**
 - Assume the Pro wrapper should use **strict proof** by default
+- Assume the Pro wrapper should use **Enter-first submit** and at most **one bounded self-heal retry**
 - Use the desktop-backed runtime, not the experimental browser transport, unless you are diagnosing a desktop-only failure
 
 ## Execution Workflow
@@ -55,6 +56,8 @@ node {baseDir}/scripts/submit-pro.js --prompt-file <temp-file>
 
 Receipt meaning:
 - `submitted: true` means the prompt was validated locally, the submit attempt ran in a dedicated target window, the run proved a ChatGPT conversation URL from the visible target window, and a screenshot artifact was captured.
+- `submitted: false` may still include `debugArtifacts` that show the validation window screenshot, cropped composer screenshot, OCR text sample, failed validation proof, and the failure-only prompt artifact path. `screenshotPath` remains the strict success screenshot only.
+- Every run also writes a canonical bundle under `artifacts/runs/<timestamp>-<runId>/` with `receipt.json`, `summary.json`, worker traces, and screenshots. Agents should inspect `summary.json` first.
 - It does not mean the skill read, scraped, or summarized the ChatGPT reply.
 - Successful Pro runs intentionally leave the successful ChatGPT window open for the user to inspect.
 

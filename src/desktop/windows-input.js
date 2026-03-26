@@ -41,6 +41,14 @@ export async function ocrImageText(imagePath) {
   );
 }
 
+export async function cropImage(imagePath, cropRect, outputPath) {
+  return client().call(
+    'cropImage',
+    { imagePath, cropRect, outputPath },
+    { step: 'desktop-crop-image', timeoutMs: 10000 }
+  );
+}
+
 export async function openBrowserWindow(handle, url) {
   return client().call(
     'launchBrowserWindow',

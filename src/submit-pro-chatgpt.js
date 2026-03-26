@@ -143,7 +143,7 @@ export function normalizeSubmitProArgs(argv = []) {
     normalized.push('--proof-level', 'strict');
   }
   if (!hasSubmitMethod) {
-    normalized.push('--submit-method', 'click');
+    normalized.push('--submit-method', 'enter');
   }
 
   return normalized;

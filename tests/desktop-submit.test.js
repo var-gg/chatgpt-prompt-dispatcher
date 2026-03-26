@@ -9,13 +9,19 @@ const {
   looksLikeComposerElement,
   looksLikePromptEcho,
   buildCoordinateInsertionProof,
+  buildPromptMarkers,
   looksLikeComposerPlaceholderText,
+  looksLikeVisualComposerPlaceholder,
   normalizePromptForSubmission,
+  normalizeMarkerText,
   isLongPrompt,
   shouldTrustFocusSafeHashProof,
   hasCredibleComposerFocus,
   shouldTrustValidatedPromptForSubmit,
   shouldReprimePromptBeforeSubmit,
+  assessComposerVisualPromptEvidence,
+  computeComposerCropRect,
+  countPromptMarkers,
   deriveSubmitProof,
   hasVisibleSendStateTransition,
   buildSubmitAttemptOrder,
@@ -32,7 +38,10 @@ const {
   pickOpenedBrowserWindow,
   resolveDesktopScreenshotPath,
   resolveStrictBaselineScreenshotPath,
-  isRectClose
+  isRectClose,
+  classifyDesktopFailure,
+  phaseForDesktopStep,
+  isSoftRecoveryEligible
 } = __desktopSubmitInternals;
 
 test('isLikelyOmniboxElement rejects Chrome address bar candidates', () => {
@@ -254,6 +263,13 @@ test('shouldTrustValidatedPromptForSubmit allows submit without button discovery
   assert.equal(hasCredibleComposerFocus(promptFocus), true);
   assert.equal(shouldTrustValidatedPromptForSubmit(true, promptFocus), true);
   assert.equal(shouldTrustValidatedPromptForSubmit(false, promptFocus), false);
+  assert.equal(shouldTrustValidatedPromptForSubmit({
+    validationLevel: 'visual'
+  }, promptFocus), true);
+  assert.equal(shouldTrustValidatedPromptForSubmit({
+    validationLevel: 'none',
+    submitAllowed: true
+  }, promptFocus), true);
 });
 
 test('shouldTrustFocusSafeHashProof rejects value-only insertion but accepts roundtrip-backed proof', () => {
@@ -285,7 +301,7 @@ test('shouldReprimePromptBeforeSubmit forces a fresh paste after clipboard-based
       method: 'uia-focus+slow-clipboard-paste+slow-clipboard-roundtrip-recovery',
       proof: 'recoveredBySlowClipboardRoundtrip'
     },
-    { proof: 'validatedInputHashMatchedAndComposerCredible' },
+    { proof: 'validatedInputTrustedAndComposerCredible' },
     { submitButton: null }
   ), true);
 
@@ -294,23 +310,127 @@ test('shouldReprimePromptBeforeSubmit forces a fresh paste after clipboard-based
       method: 'uia-focus+value-set+light-composer-present-proof',
       proof: 'promptPresentComposerCredible'
     },
-    { proof: 'validatedInputHashMatchedAndComposerCredible' },
+    { proof: 'validatedInputTrustedAndComposerCredible' },
     { submitButton: { name: 'Send', isEnabled: true } }
+  ), false);
+
+  assert.equal(shouldReprimePromptBeforeSubmit(
+    {
+      method: 'coordinate-click+clipboard-paste+composer-visual-proof',
+      proof: 'composerVisualMarkersMatched',
+      validationLevel: 'visual'
+    },
+    { proof: 'validatedInputTrustedAndComposerCredible' },
+    { submitButton: null }
+  ), false);
+
+  assert.equal(shouldReprimePromptBeforeSubmit(
+    {
+      method: 'coordinate-click+clipboard-paste+bounded-visible-recovery',
+      proof: 'visibleSendableRecoveryHint',
+      validationLevel: 'none',
+      submitAllowed: true
+    },
+    { proof: 'validatedInputTrustedAndComposerCredible' },
+    { submitButton: null }
   ), false);
 });
 
 test('shouldUseFastEnterSubmitPath enables short post-submit wait for validated enter fallback', () => {
   assert.equal(shouldUseFastEnterSubmitPath(
     'enter',
-    { proof: 'validatedInputHashMatchedAndComposerCredible' },
+    { proof: 'validatedInputTrustedAndComposerCredible' },
     { submitButton: null }
   ), true);
 
   assert.equal(shouldUseFastEnterSubmitPath(
     'click',
-    { proof: 'validatedInputHashMatchedAndComposerCredible' },
+    { proof: 'validatedInputTrustedAndComposerCredible' },
     { submitButton: null }
   ), false);
+});
+
+test('buildPromptMarkers and marker counting prefer long-prompt anchors over full exact OCR', () => {
+  const prompt = [
+    '첫 줄 요약: 2026년 4월 나스닥 전망과 금리 이벤트를 함께 분석해줘.',
+    '중간 본문: 금리, AI 밸류에이션, 매크로 이벤트를 반드시 포함해.',
+    '마지막 줄 토큰: NASDAQ-LONG-END-202604'
+  ].join('\n');
+  const markerSpec = buildPromptMarkers(prompt);
+  const ocrText = normalizeMarkerText('첫 줄 요약: 2026년 4월 나스닥 전망과 금리 이벤트를 함께 분석해줘. 마지막 줄 토큰: nasdaq-long-end-202604');
+
+  assert.equal(markerSpec.requiredMatches, 2);
+  assert.equal(countPromptMarkers(ocrText, markerSpec.markers) >= 2, true);
+});
+
+test('looksLikeVisualComposerPlaceholder treats bare placeholder OCR as non-proof', () => {
+  assert.equal(looksLikeVisualComposerPlaceholder('ChatGPT와 채팅'), true);
+  assert.equal(looksLikeVisualComposerPlaceholder('Message ChatGPT'), true);
+  assert.equal(looksLikeVisualComposerPlaceholder('실제 프롬프트 한 줄'), false);
+});
+
+test('assessComposerVisualPromptEvidence accepts marker matches and rejects unchanged placeholder states', () => {
+  const prompt = '첫 줄 요약: 2026년 4월 나스닥 전망\n중간 줄: 금리 이벤트 반영\nLONG-END-TOKEN-202604-VERIFY';
+  assert.deepEqual(
+    assessComposerVisualPromptEvidence({
+      prompt,
+      composerOcrTextSample: '첫 줄 요약: 2026년 4월 나스닥 전망 LONG-END-TOKEN-202604-VERIFY',
+      normalizedOcrText: normalizeMarkerText('첫 줄 요약: 2026년 4월 나스닥 전망 LONG-END-TOKEN-202604-VERIFY'),
+      baselineHash: 'before',
+      composerHash: 'after',
+      focusCredible: true
+    }),
+    {
+      ok: true,
+      proof: 'composerVisualMarkersMatched',
+      validationLevel: 'visual',
+      markersMatched: 2,
+      requiredMatches: 2
+    }
+  );
+
+  assert.deepEqual(
+    assessComposerVisualPromptEvidence({
+      prompt,
+      composerOcrTextSample: 'ChatGPT와 채팅',
+      normalizedOcrText: normalizeMarkerText('ChatGPT와 채팅'),
+      baselineHash: 'same',
+      composerHash: 'same',
+      focusCredible: true
+    }),
+    {
+      ok: false,
+      proof: 'composerVisualStillPlaceholder',
+      validationLevel: 'none',
+      markersMatched: 0,
+      requiredMatches: 2
+    }
+  );
+});
+
+test('assessComposerVisualPromptEvidence allows changed non-placeholder composer crop even with weak OCR', () => {
+  const result = assessComposerVisualPromptEvidence({
+    prompt: '첫 줄\n중간 줄\n마지막 줄 토큰 202604',
+    composerOcrTextSample: '중간 줄 일부만 OCR 됨',
+    normalizedOcrText: normalizeMarkerText('중간 줄 일부만 OCR 됨'),
+    baselineHash: 'before',
+    composerHash: 'after',
+    focusCredible: true
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.proof, 'composerVisualChangedWithoutPlaceholder');
+  assert.equal(result.validationLevel, 'visual');
+});
+
+test('computeComposerCropRect clamps the crop within the current window bounds', () => {
+  assert.deepEqual(
+    computeComposerCropRect(
+      { x: 100, y: 80, width: 800, height: 600 },
+      { x: 120, y: 500, width: 500, height: 33 }
+    ),
+    { x: 0, y: 400, width: 548, height: 200 }
+  );
 });
 
 test('normalizeAddressValue canonicalizes chatgpt URLs for omnibox verification', () => {
@@ -412,6 +532,11 @@ test('resolveDesktopScreenshotPath creates deterministic artifact paths when non
   const baseline = resolveStrictBaselineScreenshotPath(generated);
   assert.ok(baseline.includes('.pre-submit'));
   assert.ok(baseline.endsWith('.png'));
+
+  const runScoped = resolveDesktopScreenshotPath(null, 'default', 'artifacts/runs/example/screenshots');
+  assert.ok(runScoped.includes('artifacts'));
+  assert.ok(runScoped.includes('runs'));
+  assert.ok(runScoped.includes('screenshots'));
 });
 
 test('isRectClose tolerates small window settling drift only', () => {
@@ -426,4 +551,24 @@ test('isRectClose tolerates small window settling drift only', () => {
     { x: 100, y: 100, width: 1200, height: 800 },
     3
   ), false);
+});
+
+test('phaseForDesktopStep maps high-level steps into stable diagnostic phases', () => {
+  assert.equal(phaseForDesktopStep('select-window'), 'seed-window');
+  assert.equal(phaseForDesktopStep('focus-prompt'), 'prompt-focus');
+  assert.equal(phaseForDesktopStep('validate-prompt'), 'prompt-validate');
+  assert.equal(phaseForDesktopStep('submit-prompt'), 'submit-attempt');
+  assert.equal(phaseForDesktopStep('strict-submit-proof'), 'strict-proof');
+});
+
+test('classifyDesktopFailure groups failure causes for summary.json output', () => {
+  assert.equal(classifyDesktopFailure(new StepError('PROMPT_VALIDATION_FAILED', 'validate-prompt', 'bad')), 'prompt-validation-failed');
+  assert.equal(classifyDesktopFailure(new StepError('SUBMIT_PRECHECK_FAILED', 'submit-prompt-precheck', 'bad')), 'submit-gate-failed');
+  assert.equal(classifyDesktopFailure(new StepError('STRICT_PROOF_FAILED', 'strict-submit-proof', 'bad')), 'strict-proof-failed');
+});
+
+test('isSoftRecoveryEligible only allows a single bounded recovery class of failures', () => {
+  assert.equal(isSoftRecoveryEligible(new StepError('PROMPT_VALIDATION_FAILED', 'validate-prompt', 'bad')), true);
+  assert.equal(isSoftRecoveryEligible(new StepError('SUBMIT_PRECHECK_FAILED', 'submit-prompt-precheck', 'bad')), true);
+  assert.equal(isSoftRecoveryEligible(new StepError('STRICT_PROOF_FAILED', 'strict-submit-proof', 'bad')), false);
 });

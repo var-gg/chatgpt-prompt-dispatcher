@@ -3,11 +3,20 @@ export function createReceipt({
   modeResolved,
   projectResolved,
   url,
+  runId = null,
+  artifactDir = null,
   surface = null,
   proofLevel = null,
   targetWindowHandle = null,
   conversationUrl = null,
   screenshotPath = null,
+  submitAttempted = false,
+  submitAttemptMethod = null,
+  failureClass = null,
+  failureReason = null,
+  attemptCount = 1,
+  finalAction = null,
+  debugArtifacts = null,
   notes = []
 }) {
   return {
@@ -16,11 +25,20 @@ export function createReceipt({
     modeResolved,
     projectResolved,
     url,
+    runId,
+    artifactDir,
     surface,
     proofLevel,
     targetWindowHandle,
     conversationUrl,
     screenshotPath,
+    submitAttempted,
+    submitAttemptMethod,
+    failureClass,
+    failureReason,
+    attemptCount,
+    finalAction,
+    debugArtifacts,
     notes
   };
 }
@@ -29,10 +47,19 @@ export function createFailureReceipt({
   error,
   screenshotPath = null,
   url = null,
+  runId = null,
+  artifactDir = null,
   surface = null,
   proofLevel = null,
   targetWindowHandle = null,
   conversationUrl = null,
+  submitAttempted = false,
+  submitAttemptMethod = null,
+  failureClass = null,
+  failureReason = null,
+  attemptCount = 1,
+  finalAction = null,
+  debugArtifacts = null,
   notes = []
 }) {
   return {
@@ -44,11 +71,20 @@ export function createFailureReceipt({
       message: error.message
     },
     url,
+    runId,
+    artifactDir,
     surface,
     proofLevel,
     targetWindowHandle,
     conversationUrl,
     screenshotPath,
+    submitAttempted,
+    submitAttemptMethod,
+    failureClass,
+    failureReason,
+    attemptCount,
+    finalAction,
+    debugArtifacts,
     notes
   };
 }

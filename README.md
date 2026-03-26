@@ -15,10 +15,13 @@ The repo is **desktop-first**:
 - Normalize navigation to `https://chatgpt.com/`.
 - Optionally switch the visible UI to `Pro`.
 - Paste and validate a prepared prompt.
-- Submit immediately and return a receipt JSON with strict proof metadata when requested.
+- Submit immediately with an Enter-first Pro default, a single bounded self-heal retry, and return a receipt JSON with strict proof metadata when requested.
+- Persist a run-scoped artifact bundle under `artifacts/runs/<timestamp>-<runId>/`.
 
 Receipt semantics:
 - `submitted: true` on the strict Pro path means the prompt hash was validated, the submit attempt ran in the dedicated target window, the run proved a `https://chatgpt.com/c/<id>` conversation URL from the visible window, and a screenshot of that exact window was saved.
+- `submitted: false` can now still include `debugArtifacts` with a validation window screenshot, a cropped composer screenshot, OCR text sample, failed validation proof, and a failure-only prompt artifact path. `screenshotPath` remains reserved for the strict success screenshot only.
+- Receipts now also carry `runId`, `artifactDir`, `submitAttempted`, `submitAttemptMethod`, `attemptCount`, `failureClass`, `failureReason`, and `finalAction` so an agent can classify the run without reopening every log file.
 - It does not imply response scraping, reply retrieval, or transcript reading.
 
 ## What it does not do
@@ -93,6 +96,8 @@ Defaults for `submit-pro-chatgpt`:
 - `--new-chat`
 - `--surface new-window`
 - `--proof-level strict`
+- `--submit-method enter`
+- one bounded self-heal retry before fail-close
 
 Explicit desktop alias:
 
@@ -129,6 +134,16 @@ Strict Pro receipts also save:
 - `targetWindowHandle`
 - `conversationUrl`
 - `screenshotPath`
+- `debugArtifacts` on validation/strict-proof failures
+- `runId` and `artifactDir`
+
+Canonical run diagnostics:
+- `artifacts/runs/<timestamp>-<runId>/receipt.json`
+- `artifacts/runs/<timestamp>-<runId>/summary.json`
+- `artifacts/runs/<timestamp>-<runId>/submit.jsonl`
+- `artifacts/runs/<timestamp>-<runId>/worker-client.jsonl`
+- `artifacts/runs/<timestamp>-<runId>/worker.jsonl`
+- `artifacts/runs/<timestamp>-<runId>/screenshots/`
 
 ## Experimental browser transport
 

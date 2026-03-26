@@ -4,15 +4,24 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { createFailureReceipt, createReceipt } from '../receipt.js';
 import { StepError, ERROR_CODES } from '../errors.js';
 import { parseDesktopSubmitArgs } from '../args.js';
-import { defaultLogPath, writeJsonlLog } from '../logger.js';
+import { writeJsonlLogs } from '../logger.js';
 import { loadProfile } from '../profile-loader.js';
 import { validateConfig } from '../config-schema.js';
+import {
+  buildDesktopRunSummary,
+  createDesktopRunArtifacts,
+  ensureDesktopRunArtifacts,
+  writeFailedPromptArtifact,
+  writeRunReceiptArtifacts
+} from '../run-artifacts.js';
 import { loadCalibrationProfile } from './calibration-store.js';
 import { getStandardWindowBounds, resolveAnchorPoint } from './geometry.js';
 import { selectDesktopMode, startDesktopNewChat } from './chatgpt-desktop-actions.js';
+import { configureDesktopWorker, shutdownDesktopWorker } from './powershell.js';
 import {
   captureWindowScreenshot,
   clickPoint,
+  cropImage,
   delay,
   focusWindow,
   getClipboardText,
@@ -49,6 +58,10 @@ const CLIPBOARD_COPY_SETTLE_MS = 400;
 const NEW_WINDOW_DETECT_ATTEMPTS = 18;
 const STRICT_CONVERSATION_WAIT_ATTEMPTS = 20;
 const STRICT_OCR_WAIT_ATTEMPTS = 12;
+const COMPOSER_CROP_PADDING_X = 24;
+const COMPOSER_CROP_PADDING_TOP = 20;
+const COMPOSER_CROP_PADDING_BOTTOM = 220;
+const COMPOSER_CROP_MIN_HEIGHT = 220;
 const OMNIBOX_HINTS = [
   '주소창',
   'address',
@@ -86,16 +99,88 @@ export async function submitDesktopChatgpt(argv = []) {
   let surface = 'same-window';
   let proofLevel = 'fast';
   let strictPreSubmitBaseline = null;
+  let composerVisualBaseline = null;
+  let debugArtifacts = null;
+  let prompt = '';
+  let promptFocus = null;
+  let insertion = null;
+  let validation = null;
+  let args = null;
+  let submitAttempted = false;
+  let submitAttemptMethod = null;
+  let finalAction = 'submit-withheld';
+  let failureClass = null;
+  let failureReason = null;
+  let attemptCount = 1;
+  let currentAttemptIndex = 1;
   const notes = [];
+  const runArtifacts = createDesktopRunArtifacts();
+  const submitLogPaths = [runArtifacts.submitLogPath, runArtifacts.aggregateSubmitLogPath];
+
+  const logSubmitEvent = async (event = {}) => {
+    const step = event.step || lastStep;
+    await writeJsonlLogs(submitLogPaths, {
+      runId: runArtifacts.runId,
+      artifactDir: runArtifacts.artifactDir,
+      phase: event.phase || phaseForDesktopStep(step),
+      attemptIndex: event.attemptIndex || currentAttemptIndex,
+      targetWindowHandle,
+      ...event
+    });
+  };
+
+  const syncAutomationContext = async (step = lastStep, phase = null, attemptIndex = currentAttemptIndex) => {
+    await configureDesktopWorker({
+      logPath: runArtifacts.workerClientLogPath,
+      workerLogPath: runArtifacts.workerLogPath,
+      automationContext: {
+        runId: runArtifacts.runId,
+        attemptIndex,
+        phase: phase || phaseForDesktopStep(step),
+        step,
+        targetWindowHandle
+      }
+    });
+  };
+
+  const finalizeReceipt = async (receipt) => {
+    const summary = buildDesktopRunSummary({
+      receipt,
+      runId: runArtifacts.runId,
+      artifactDir: runArtifacts.artifactDir,
+      finalAction,
+      attemptCount,
+      submitAttempted,
+      submitAttemptMethod,
+      failureClass,
+      failureReason,
+      debugArtifacts,
+      targetWindowHandle,
+      conversationUrl,
+      logPaths: {
+        submitLogPath: runArtifacts.submitLogPath,
+        workerClientLogPath: runArtifacts.workerClientLogPath,
+        workerLogPath: runArtifacts.workerLogPath,
+        aggregateSubmitLogPath: runArtifacts.aggregateSubmitLogPath
+      }
+    });
+    await writeRunReceiptArtifacts(runArtifacts, receipt, summary).catch(() => {});
+    return receipt;
+  };
+
+  await ensureDesktopRunArtifacts(runArtifacts).catch(() => {});
 
   try {
-    const args = await parseDesktopSubmitArgs(argv);
+    args = await parseDesktopSubmitArgs(argv);
+    prompt = normalizePromptForSubmission(args.prompt);
     enforceDesktopFirstConstraints(args);
-    const prompt = normalizePromptForSubmission(args.prompt);
     modeResolved = args.mode || 'auto';
     surface = args.surface || 'same-window';
     proofLevel = args.proofLevel || 'fast';
-    logPath = defaultLogPath(`desktop-submit-${args.calibrationProfile}`);
+    logPath = runArtifacts.submitLogPath;
+
+    await shutdownDesktopWorker().catch(() => {});
+    await syncAutomationContext('init', 'init');
 
     lastStep = 'load-ui-profile';
     const uiProfile = validateConfig(await loadProfile(args.profile));
@@ -108,12 +193,18 @@ export async function submitDesktopChatgpt(argv = []) {
     const titleHint = args.windowTitle || calibration?.window?.titleHint || 'ChatGPT';
     const promptPoint = resolveAnchorPoint(calibration, 'promptInput', targetBounds);
     const submitPoint = resolveAnchorPoint(calibration, 'submitButton', targetBounds);
-    screenshotPath = resolveDesktopScreenshotPath(args.screenshotPath, args.calibrationProfile);
+    screenshotPath = resolveDesktopScreenshotPath(
+      args.screenshotPath,
+      args.calibrationProfile,
+      runArtifacts.screenshotsDir
+    );
 
     notes.push('transport=desktop');
     notes.push('transportStatus=default');
     notes.push('fallbackOrder=UIA>focus-enter>calibrated-coordinates');
     notes.push('desktopMode=deterministic-desktop-pro-handoff');
+    notes.push(`runId=${runArtifacts.runId}`);
+    notes.push(`artifactDir=${runArtifacts.artifactDir}`);
     notes.push(`profile=${uiProfile.profileName}`);
     notes.push(`uiTier=${uiProfile.chatgpt?.uiTier || 'unknown'}`);
     notes.push(`modeResolved=${modeResolved}`);
@@ -127,8 +218,10 @@ export async function submitDesktopChatgpt(argv = []) {
     notes.push(`submitPoint=${submitPoint.x},${submitPoint.y}`);
     notes.push(`plannedScreenshotPath=${screenshotPath}`);
     notes.push(`logPath=${logPath}`);
+    notes.push(`aggregateLogPath=${runArtifacts.aggregateSubmitLogPath}`);
+    notes.push(`workerTracePath=${runArtifacts.workerLogPath}`);
 
-    await writeJsonlLog(logPath, {
+    await logSubmitEvent({
       step: 'init',
       profile: args.profile,
       modeResolved,
@@ -146,19 +239,29 @@ export async function submitDesktopChatgpt(argv = []) {
     if (process.env.SKIP_DESKTOP_AUTOMATION === '1' || process.env.SKIP_BROWSER_AUTOMATION === '1') {
       notes.push('desktopAutomation=skipped');
       notes.push(`promptHash=${hashText(prompt)}`);
-      return createReceipt({
+      return finalizeReceipt(createReceipt({
         submitted: false,
         modeResolved,
         projectResolved: null,
         url: CHATGPT_URL,
+        runId: runArtifacts.runId,
+        artifactDir: runArtifacts.artifactDir,
         surface,
         proofLevel,
         screenshotPath: capturedScreenshotPath,
+        submitAttempted,
+        submitAttemptMethod,
+        failureClass,
+        failureReason,
+        attemptCount,
+        finalAction,
+        debugArtifacts,
         notes
-      });
+      }));
     }
 
     lastStep = 'select-window';
+    await syncAutomationContext(lastStep);
     const windowSelection = await chooseVerifiedChatGptWindow(titleHint);
     const seedWindow = windowSelection.selectedWindow;
     let selectedWindow = seedWindow;
@@ -169,10 +272,12 @@ export async function submitDesktopChatgpt(argv = []) {
     if (windowSelection.evidence?.reasons?.length) {
       notes.push(`seedTargetEvidence=${windowSelection.evidence.reasons.join('+')}`);
     }
-    await writeJsonlLog(logPath, { step: lastStep, seedWindow, targetEvidence: windowSelection.evidence, candidates: windowSelection.candidates });
+    await syncAutomationContext(lastStep);
+    await logSubmitEvent({ step: lastStep, seedWindow, targetEvidence: windowSelection.evidence, candidates: windowSelection.candidates });
 
     if (surface === 'new-window') {
       lastStep = 'create-surface';
+      await syncAutomationContext(lastStep);
       const surfaceResult = await createDedicatedWindowSurface({
         seedWindow,
         stepDelayMs: args.stepDelayMs
@@ -183,34 +288,39 @@ export async function submitDesktopChatgpt(argv = []) {
       notes.push(`surfaceWindowHandle=${selectedWindow.handle}`);
       notes.push(`surfaceWindowTitle=${selectedWindow.title}`);
       notes.push(`surfaceCreationProof=${surfaceResult.proof}`);
-      await writeJsonlLog(logPath, { step: lastStep, surfaceResult });
+      await syncAutomationContext(lastStep);
+      await logSubmitEvent({ step: lastStep, surfaceResult });
     } else {
       notes.push(`surfaceWindowHandle=${selectedWindow.handle}`);
       notes.push(`surfaceWindowTitle=${selectedWindow.title}`);
     }
 
     lastStep = 'focus-window';
+    await syncAutomationContext(lastStep);
     const focusWindowResult = await stabilizeWindowFocus(selectedWindow.handle, args.stepDelayMs);
-    await writeJsonlLog(logPath, { step: lastStep, handle: selectedWindow.handle, focusWindowResult });
+    await logSubmitEvent({ step: lastStep, handle: selectedWindow.handle, focusWindowResult });
     notes.push(`windowFocusProof=${focusWindowResult.proof}`);
 
     lastStep = 'normalize-window';
+    await syncAutomationContext(lastStep);
     await resizeWindow(targetBounds, selectedWindow.handle);
     const normalizedWindow = await waitForWindowRectStability(selectedWindow.handle, targetBounds, args.stepDelayMs);
     lastWindow = normalizedWindow.window;
-    await writeJsonlLog(logPath, { step: lastStep, window: lastWindow, normalizedWindow });
+    await logSubmitEvent({ step: lastStep, window: lastWindow, normalizedWindow });
 
     lastStep = 'navigate-chatgpt';
+    await syncAutomationContext(lastStep);
     const navigation = await navigateToChatGpt(selectedWindow.handle, CHATGPT_URL, args.stepDelayMs);
     currentUrl = navigation.currentUrl;
-    await writeJsonlLog(logPath, { step: lastStep, navigation });
+    await logSubmitEvent({ step: lastStep, navigation });
     notes.push(`navigationProof=${navigation.proof}`);
 
     lastStep = 'verify-url-after-navigation';
+    await syncAutomationContext(lastStep);
     const urlCheck = await readCurrentUrl(selectedWindow.handle).catch(() => '');
     currentUrl = String(urlCheck || '').trim() || currentUrl || CHATGPT_URL;
     const currentUrlLooksValid = isChatGptUrl(currentUrl);
-    await writeJsonlLog(logPath, { step: lastStep, currentUrl, currentUrlLooksValid });
+    await logSubmitEvent({ step: lastStep, currentUrl, currentUrlLooksValid });
     if (!currentUrlLooksValid) {
       notes.push(`staleOmniboxUrl=${truncateForNote(currentUrl)}`);
       notes.push('urlVerificationDegraded=ignored-non-url-omnibox-echo');
@@ -219,6 +329,7 @@ export async function submitDesktopChatgpt(argv = []) {
 
     if (proofLevel === 'strict' && surface === 'new-window') {
       lastStep = 'verify-fresh-surface';
+      await syncAutomationContext(lastStep);
       const surfaceReady = await verifyStrictFreshSurface({
         handle: selectedWindow.handle,
         currentUrl,
@@ -226,26 +337,29 @@ export async function submitDesktopChatgpt(argv = []) {
       });
       currentUrl = surfaceReady.currentUrl || currentUrl;
       notes.push(`surfaceReadyProof=${surfaceReady.proof}`);
-      await writeJsonlLog(logPath, { step: lastStep, surfaceReady });
+      await logSubmitEvent({ step: lastStep, surfaceReady });
     }
 
     lastStep = 'dismiss-interstitials';
+    await syncAutomationContext(lastStep);
     const dismissal = await dismissInterferingUi(selectedWindow.handle, args.stepDelayMs);
     if (dismissal?.acted) {
       notes.push(`dismissedUi=${dismissal.method}`);
     }
-    await writeJsonlLog(logPath, { step: lastStep, dismissal });
+    await logSubmitEvent({ step: lastStep, dismissal });
 
     lastStep = 'normalize-zoom';
+    await syncAutomationContext(lastStep);
     await sendKeys('0', ['ctrl']);
     await delay(args.stepDelayMs);
-    await writeJsonlLog(logPath, { step: lastStep });
+    await logSubmitEvent({ step: lastStep });
 
     if (args.newChat) {
       if (surface === 'new-window' && proofLevel === 'strict' && isChatGptHomeUrl(currentUrl)) {
         notes.push('newChatSkipped=freshWindowAlreadyAtHome');
       } else {
         lastStep = 'start-new-chat';
+        await syncAutomationContext(lastStep);
         const newChatResult = await startDesktopNewChat({
           handle: selectedWindow.handle,
           stepDelayMs: args.stepDelayMs,
@@ -255,12 +369,13 @@ export async function submitDesktopChatgpt(argv = []) {
         });
         notes.push(`newChatProof=${newChatResult.proof}`);
         notes.push(`newChatMethod=${newChatResult.method}`);
-        await writeJsonlLog(logPath, { step: lastStep, newChatResult });
+        await logSubmitEvent({ step: lastStep, newChatResult });
       }
     }
 
     if (modeResolved !== 'auto') {
       lastStep = 'select-mode';
+      await syncAutomationContext(lastStep);
       const modeResult = await selectDesktopMode({
         handle: selectedWindow.handle,
         stepDelayMs: args.stepDelayMs,
@@ -272,11 +387,13 @@ export async function submitDesktopChatgpt(argv = []) {
       notes.push(`modeSelectionProof=${modeResult.proof}`);
       notes.push(`modeSelectionMethod=${modeResult.method}`);
       notes.push(`modeConfirmed=${modeResult.confirmed !== false}`);
-      await writeJsonlLog(logPath, { step: lastStep, modeResult });
+      await logSubmitEvent({ step: lastStep, modeResult });
     }
 
     lastStep = 'focus-prompt';
-    const promptFocus = await focusPromptBox(selectedWindow.handle, promptPoint, args.stepDelayMs);
+    currentAttemptIndex = 1;
+    await syncAutomationContext(lastStep);
+    promptFocus = await focusPromptBox(selectedWindow.handle, promptPoint, args.stepDelayMs);
     lastFocusedElement = promptFocus.focusedElement ?? null;
     notes.push(`promptFocusVia=${promptFocus.via}`);
     if (promptFocus.omniboxRejected) {
@@ -285,48 +402,120 @@ export async function submitDesktopChatgpt(argv = []) {
     if (promptFocus.readinessProof) {
       notes.push(`composerReadiness=${promptFocus.readinessProof}`);
     }
-    await writeJsonlLog(logPath, { step: lastStep, promptFocus });
+    await logSubmitEvent({ step: lastStep, promptFocus });
+
+    if (isLongPrompt(prompt)) {
+      lastStep = 'capture-composer-baseline';
+      await syncAutomationContext(lastStep);
+      composerVisualBaseline = await collectComposerVisualBaseline({
+        handle: selectedWindow.handle,
+        screenshotPath,
+        promptFocus,
+        prompt,
+        stepDelayMs: args.stepDelayMs,
+        windowRect: lastWindow?.rect || null
+      }).catch(() => null);
+      if (composerVisualBaseline?.debugArtifacts) {
+        debugArtifacts = mergeDebugArtifacts(debugArtifacts, composerVisualBaseline.debugArtifacts);
+      }
+      await logSubmitEvent({ step: lastStep, composerVisualBaseline });
+    }
 
     lastStep = 'insert-prompt';
-    const insertion = await insertPrompt(selectedWindow.handle, prompt, promptFocus, args.stepDelayMs);
+    await syncAutomationContext(lastStep);
+    insertion = await insertPrompt(selectedWindow.handle, prompt, promptFocus, args.stepDelayMs);
     clipboardHash = insertion.actualHash;
     lastFocusedElement = insertion.focusedElement ?? lastFocusedElement;
     notes.push(`promptHash=${insertion.expectedHash}`);
     notes.push(`insertionMethod=${insertion.method}`);
-    await writeJsonlLog(logPath, { step: lastStep, insertion });
+    await logSubmitEvent({ step: lastStep, insertion });
 
     lastStep = 'validate-prompt';
-    const validation = await validatePromptInput(selectedWindow.handle, prompt, promptFocus, insertion, args.stepDelayMs);
+    await syncAutomationContext(lastStep);
+    validation = await validatePromptInput(
+      selectedWindow.handle,
+      prompt,
+      promptFocus,
+      insertion,
+      args.stepDelayMs,
+      {
+        screenshotPath,
+        windowRect: lastWindow?.rect || null,
+        baseline: composerVisualBaseline
+      }
+    ).catch(async (validationError) => {
+      attemptCount = Math.max(attemptCount, 2);
+      currentAttemptIndex = 2;
+      const recovery = await attemptBoundedVisiblePasteRecovery({
+        handle: selectedWindow.handle,
+        prompt,
+        promptFocus,
+        insertion,
+        stepDelayMs: args.stepDelayMs,
+        screenshotPath,
+        windowRect: lastWindow?.rect || null,
+        baseline: composerVisualBaseline,
+        error: validationError,
+        targetWindowHandle,
+        attemptIndex: 2,
+        logEvent: logSubmitEvent,
+        syncAutomationContext
+      });
+      if (!recovery?.ok) {
+        throw validationError;
+      }
+      finalAction = 'submit-withheld';
+      notes.push('selfHealRetry=1');
+      notes.push(`retryRecoveryProof=${recovery.validation.proof}`);
+      return recovery.validation;
+    });
     clipboardHash = validation.clipboardHash;
     lastFocusedElement = validation.focusedElement ?? lastFocusedElement;
+    attemptCount = Math.max(attemptCount, validation.recoveryTriggered ? 2 : 1);
     notes.push(`validationMethod=${validation.method}`);
+    notes.push(`validationLevel=${validation.validationLevel || 'none'}`);
+    notes.push(`promptValidated=${validation.promptValidated === true}`);
+    notes.push(`submitAllowed=${validation.submitAllowed === true}`);
     if (validation.proof) {
       notes.push(`inputProof=${validation.proof}`);
     }
-    await writeJsonlLog(logPath, { step: lastStep, validation });
+    if (validation.debugArtifacts) {
+      debugArtifacts = mergeDebugArtifacts(debugArtifacts, validation.debugArtifacts);
+    }
+    await logSubmitEvent({ step: lastStep, validation, attemptIndex: validation.recoveryTriggered ? 2 : currentAttemptIndex });
 
     if (args.dryRun || !args.submit) {
       lastStep = 'dry-run-ready';
-      await writeJsonlLog(logPath, { step: lastStep, currentUrl, window: lastWindow, focusedElement: lastFocusedElement, clipboardHash });
+      await logSubmitEvent({ step: lastStep, currentUrl, window: lastWindow, focusedElement: lastFocusedElement, clipboardHash });
       if (!args.submit) {
         notes.push('submit=false');
       }
-      return createReceipt({
+      return finalizeReceipt(createReceipt({
         submitted: false,
         modeResolved,
         projectResolved: null,
         url: currentUrl,
+        runId: runArtifacts.runId,
+        artifactDir: runArtifacts.artifactDir,
         surface,
         proofLevel,
         targetWindowHandle,
         conversationUrl,
         screenshotPath: proofLevel === 'strict' ? capturedScreenshotPath : null,
+        submitAttempted,
+        submitAttemptMethod,
+        failureClass,
+        failureReason,
+        attemptCount,
+        finalAction,
+        debugArtifacts,
         notes
-      });
+      }));
     }
 
     if (proofLevel === 'strict') {
       lastStep = 'strict-pre-submit-baseline';
+      await syncAutomationContext(lastStep);
       strictPreSubmitBaseline = await collectStrictPreSubmitBaseline({
         handle: selectedWindow.handle,
         currentUrl,
@@ -337,10 +526,11 @@ export async function submitDesktopChatgpt(argv = []) {
       capturedScreenshotPath = strictPreSubmitBaseline.screenshotPath || capturedScreenshotPath;
       notes.push(`strictPreSubmit=${strictPreSubmitBaseline.proof}`);
       notes.push(`strictPreSubmitTitle=${strictPreSubmitBaseline.windowTitle}`);
-      await writeJsonlLog(logPath, { step: lastStep, strictPreSubmitBaseline });
+      await logSubmitEvent({ step: lastStep, strictPreSubmitBaseline });
     }
 
     lastStep = 'submit-prompt';
+    await syncAutomationContext(lastStep, 'submit-attempt');
     const submitResult = await submitPrompt(
       selectedWindow.handle,
       submitPoint,
@@ -349,8 +539,64 @@ export async function submitDesktopChatgpt(argv = []) {
       promptFocus,
       args.submitMethod,
       validation
-    );
-    await writeJsonlLog(logPath, { step: lastStep, submitResult });
+    ).catch(async (submitError) => {
+      attemptCount = Math.max(attemptCount, 2);
+      currentAttemptIndex = 2;
+      const recovery = await attemptBoundedVisiblePasteRecovery({
+        handle: selectedWindow.handle,
+        prompt,
+        promptFocus,
+        insertion,
+        stepDelayMs: args.stepDelayMs,
+        screenshotPath,
+        windowRect: lastWindow?.rect || null,
+        baseline: composerVisualBaseline,
+        error: submitError,
+        targetWindowHandle,
+        attemptIndex: attemptCount >= 2 ? attemptCount : 2,
+        logEvent: logSubmitEvent,
+        syncAutomationContext
+      });
+      if (!recovery?.ok) {
+        throw submitError;
+      }
+      validation = recovery.validation;
+      notes.push('selfHealRetry=1');
+      notes.push(`retryRecoveryProof=${recovery.validation.proof}`);
+      if (validation.debugArtifacts) {
+        debugArtifacts = mergeDebugArtifacts(debugArtifacts, validation.debugArtifacts);
+      }
+      if (proofLevel === 'strict') {
+        lastStep = 'strict-pre-submit-baseline';
+        await syncAutomationContext(lastStep);
+        strictPreSubmitBaseline = await collectStrictPreSubmitBaseline({
+          handle: selectedWindow.handle,
+          currentUrl,
+          screenshotPath,
+          stepDelayMs: args.stepDelayMs
+        });
+        currentUrl = strictPreSubmitBaseline.currentUrl || currentUrl;
+        capturedScreenshotPath = strictPreSubmitBaseline.screenshotPath || capturedScreenshotPath;
+        await logSubmitEvent({ step: lastStep, strictPreSubmitBaseline, attemptIndex: currentAttemptIndex });
+      }
+      lastStep = 'submit-prompt';
+      await syncAutomationContext(lastStep, 'submit-attempt');
+      return submitPrompt(
+        selectedWindow.handle,
+        submitPoint,
+        args.stepDelayMs,
+        prompt,
+        promptFocus,
+        'enter',
+        validation
+      );
+    });
+    submitAttempted = Boolean(submitResult?.submitAttempted);
+    submitAttemptMethod = submitResult?.method || null;
+    finalAction = submitAttemptMethod === 'enter'
+      ? 'enter-attempted'
+      : (submitAttemptMethod === 'click' ? 'click-attempted' : finalAction);
+    await logSubmitEvent({ step: lastStep, submitResult, attemptIndex: currentAttemptIndex });
     notes.push(`submitMethod=${submitResult.method}`);
     if (submitResult.proof) {
       notes.push(`submitProof=${submitResult.proof}`);
@@ -358,6 +604,7 @@ export async function submitDesktopChatgpt(argv = []) {
 
     if (proofLevel === 'strict') {
       lastStep = 'strict-submit-proof';
+      await syncAutomationContext(lastStep);
       const strictProof = await collectStrictSubmitProof({
         handle: selectedWindow.handle,
         prompt,
@@ -374,21 +621,31 @@ export async function submitDesktopChatgpt(argv = []) {
       notes.push(`strictProof=${strictProof.proof}`);
       notes.push(`conversationUrl=${conversationUrl}`);
       notes.push(`screenshotCaptured=${screenshotPath}`);
-      await writeJsonlLog(logPath, { step: lastStep, strictProof });
+      await logSubmitEvent({ step: lastStep, strictProof });
     }
 
-    return createReceipt({
+    finalAction = 'submitted-confirmed';
+    return finalizeReceipt(createReceipt({
       submitted: true,
       modeResolved,
       projectResolved: null,
       url: conversationUrl || currentUrl,
+      runId: runArtifacts.runId,
+      artifactDir: runArtifacts.artifactDir,
       surface,
       proofLevel,
       targetWindowHandle,
       conversationUrl,
       screenshotPath: proofLevel === 'strict' ? capturedScreenshotPath : null,
+      submitAttempted,
+      submitAttemptMethod,
+      failureClass,
+      failureReason,
+      attemptCount,
+      finalAction,
+      debugArtifacts,
       notes
-    });
+    }));
   } catch (error) {
     const normalizedError = error instanceof StepError
       ? error
@@ -398,36 +655,65 @@ export async function submitDesktopChatgpt(argv = []) {
     if (lastWindow?.rect) failureNotes.push(`windowRect=${JSON.stringify(lastWindow.rect)}`);
     if (lastFocusedElement) failureNotes.push(`focusedElement=${JSON.stringify(lastFocusedElement)}`);
     if (clipboardHash) failureNotes.push(`clipboardHash=${clipboardHash}`);
+    failureClass = classifyDesktopFailure(normalizedError, lastStep);
+    failureReason = normalizedError.message;
+    if (!submitAttempted) {
+      finalAction = normalizedError.code === ERROR_CODES.STRICT_PROOF_FAILED
+        ? 'strict-proof-failed'
+        : 'submit-withheld';
+    }
+    debugArtifacts = mergeDebugArtifacts(
+      debugArtifacts,
+      extractDebugArtifactsFromError(normalizedError)
+    );
+    if (prompt) {
+      const promptArtifactPath = await writeFailedPromptArtifact(runArtifacts, prompt).catch(() => null);
+      debugArtifacts = mergeDebugArtifacts(debugArtifacts, {
+        promptArtifactPath,
+        workerTracePath: runArtifacts.workerLogPath
+      });
+    }
     if (logPath) {
-      await writeJsonlLog(logPath, {
+      await logSubmitEvent({
         step: 'failure',
         lastStep,
         error: { code: normalizedError.code, message: normalizedError.message },
         currentUrl,
         window: lastWindow,
         focusedElement: lastFocusedElement,
-        clipboardHash
+        clipboardHash,
+        finalAction,
+        failureClass
       });
     }
-    return createFailureReceipt({
+    return finalizeReceipt(createFailureReceipt({
       error: normalizedError,
       url: currentUrl || CHATGPT_URL,
+      runId: runArtifacts.runId,
+      artifactDir: runArtifacts.artifactDir,
       surface,
       proofLevel,
       targetWindowHandle,
       conversationUrl,
-      screenshotPath: proofLevel === 'strict' ? capturedScreenshotPath : null,
+      screenshotPath: null,
+      submitAttempted,
+      submitAttemptMethod,
+      failureClass,
+      failureReason,
+      attemptCount,
+      finalAction,
+      debugArtifacts,
       notes: failureNotes
-    });
+    }));
   }
 }
 
-function resolveDesktopScreenshotPath(explicitPath, calibrationProfile = 'default') {
+function resolveDesktopScreenshotPath(explicitPath, calibrationProfile = 'default', screenshotsDir = path.resolve('artifacts', 'screenshots')) {
   if (explicitPath) {
     return path.resolve(explicitPath);
   }
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return path.resolve('artifacts', 'screenshots', `desktop-submit-${calibrationProfile}-${stamp}.png`);
+  return path.resolve(screenshotsDir, `desktop-submit-${calibrationProfile}-${stamp}.png`);
 }
 
 async function createDedicatedWindowSurface({ seedWindow, stepDelayMs }) {
@@ -1011,23 +1297,6 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs) {
     || pointFromElementRect(promptFocus?.element?.rect)
     || null;
 
-  if (isLongPrompt(prompt)) {
-    const slowClipboardRecovery = await recoverPromptWithSlowClipboardRoundtrip(handle, prompt, promptFocus, stepDelayMs).catch(() => null);
-    if (slowClipboardRecovery?.ok) {
-      return mergePromptInsertionProof({
-        baseMethod: 'uia-focus+slow-clipboard-roundtrip',
-        expectedHash,
-        promptProof: {
-          text: prompt,
-          element: slowClipboardRecovery.composerElement || promptFocus?.element || null,
-          focusedElement: slowClipboardRecovery.focusedElement || promptFocus?.focusedElement || null,
-          proof: slowClipboardRecovery.proof
-        },
-        beforeSubmitState
-      });
-    }
-  }
-
   try {
     const composerTarget = await refocusComposer(handle, promptFocus, stepDelayMs);
     await clickComposerCenter(composerTarget, pointFromElementRect(composerTarget?.rect));
@@ -1158,7 +1427,7 @@ function mergePromptInsertionProof({ baseMethod, expectedHash, promptProof, visi
   };
 }
 
-async function validatePromptInput(handle, prompt, promptFocus, insertion, stepDelayMs) {
+async function validatePromptInput(handle, prompt, promptFocus, insertion, stepDelayMs, visualContext = null) {
   const expectedHash = hashText(prompt);
   const insertionHashMatched = insertion?.actualHash === expectedHash;
   const promptFocusLooksCredible = looksLikeComposerElement(promptFocus?.focusedElement) || looksLikeComposerElement(promptFocus?.element);
@@ -1169,6 +1438,10 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
       expectedHash,
       actualHash: insertion.actualHash,
       clipboardHash: expectedHash,
+      validationLevel: 'exact',
+      promptValidated: true,
+      submitAllowed: true,
+      recoveryTriggered: false,
       focusedElement: insertion.focusedElement || promptFocus?.focusedElement || null,
       composerElement: insertion.composerElement || promptFocus?.element || null,
       proof: 'promptHashMatchedAfterFocusedPaste',
@@ -1190,7 +1463,16 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
         await refocusComposer(handle, promptFocus, stepDelayMs).catch(() => {});
       },
       verify: async () => {
-        const proof = await readComposerProof(handle);
+        const proof = await readComposerProof(handle).catch((proofError) => {
+          if (proofError instanceof StepError && proofError.code === 'PROMPT_TEXT_UNAVAILABLE') {
+            return {
+              text: '',
+              element: insertion?.composerElement || promptFocus?.element || null,
+              focusedElement: insertion?.focusedElement || promptFocus?.focusedElement || null
+            };
+          }
+          throw proofError;
+        });
         ensurePromptTargetLooksCredible({
           promptFocus,
           focusedElement: proof.focusedElement,
@@ -1198,18 +1480,18 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
           prompt,
           actualHash: hashText(proof.text)
         });
-      const submitState = await sampleVisibleSubmitState(handle).catch(() => null);
-      const promptPresent = proof.text.includes(prompt);
-      const sendable = hasVisibleSendableState(submitState);
-      return {
-        ok: promptPresent && sendable,
-        proof: promptPresent
-          ? (sendable ? 'promptPresentComposerCredibleAndSendable' : 'composerContainsPromptButNotSendable')
-          : 'composerTextStillHydrating',
-        ...proof,
-        submitState: submitState || insertion?.afterSubmitState || insertion?.beforeSubmitState || null,
-        sendTransitionProven: Boolean(insertion?.visibleSendStateProven)
-      };
+        const submitState = await sampleVisibleSubmitState(handle).catch(() => null);
+        const promptPresent = proof.text.includes(prompt);
+        const sendable = hasVisibleSendableState(submitState);
+        return {
+          ok: promptPresent,
+          proof: promptPresent
+            ? (sendable ? 'promptPresentComposerCredibleAndSendable' : 'composerContainsPromptButNotSendable')
+            : 'composerTextStillHydrating',
+          ...proof,
+          submitState: submitState || insertion?.afterSubmitState || insertion?.beforeSubmitState || null,
+          sendTransitionProven: Boolean(insertion?.visibleSendStateProven)
+        };
       },
       failureCode: 'PROMPT_VALIDATION_FAILED',
       failureMessage: insertion?.proof === 'coordinateClipboardRoundtripUnconfirmed'
@@ -1218,6 +1500,36 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
     });
   } catch (error) {
     if (error instanceof StepError && error.code === 'PROMPT_VALIDATION_FAILED') {
+      const visualProof = await collectComposerVisualPromptEvidence({
+        handle,
+        prompt,
+        promptFocus,
+        insertion,
+        stepDelayMs,
+        screenshotPath: visualContext?.screenshotPath,
+        windowRect: visualContext?.windowRect || null,
+        baseline: visualContext?.baseline || null
+      }).catch(() => null);
+      if (visualProof?.ok) {
+        return {
+          method: `${insertion?.method || 'unknown'}+composer-visual-proof`,
+          expectedHash,
+          actualHash: insertion?.actualHash || '',
+          clipboardHash: insertion?.actualHash || '',
+          validationLevel: 'visual',
+          promptValidated: true,
+          submitAllowed: true,
+          recoveryTriggered: false,
+          focusedElement: visualProof.focusedElement || insertion?.focusedElement || promptFocus?.focusedElement || null,
+          composerElement: visualProof.composerElement || insertion?.composerElement || promptFocus?.element || null,
+          proof: visualProof.proof,
+          composerTextSample: String(visualProof.composerOcrTextSample || insertion?.composerTextSample || '').slice(0, 200),
+          beforeSubmitState: insertion?.beforeSubmitState,
+          afterSubmitState: visualProof.submitState || insertion?.afterSubmitState || insertion?.beforeSubmitState || null,
+          visibleSendStateProven: Boolean(visualProof?.submitState?.sendable || insertion?.visibleSendStateProven),
+          debugArtifacts: visualProof.debugArtifacts || null
+        };
+      }
       const recovery = await recoverPromptWithSlowClipboardRoundtrip(handle, prompt, promptFocus, stepDelayMs).catch(() => null);
       if (recovery?.ok && hasVisibleSendableState(recovery.submitState)) {
         return {
@@ -1225,6 +1537,10 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
           expectedHash,
           actualHash: expectedHash,
           clipboardHash: expectedHash,
+          validationLevel: 'exact',
+          promptValidated: true,
+          submitAllowed: true,
+          recoveryTriggered: false,
           focusedElement: recovery.focusedElement,
           composerElement: recovery.composerElement,
           proof: recovery.proof,
@@ -1234,6 +1550,18 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
           visibleSendStateProven: Boolean(recovery?.submitState?.sendable || insertion?.visibleSendStateProven)
         };
       }
+      throw new StepError(
+        error.code,
+        error.step,
+        error.message,
+        {
+          ...(error.details || {}),
+          debugArtifacts: visualProof?.debugArtifacts || null,
+          validationProof: visualProof?.proof || insertion?.proof || 'promptValidationFailed',
+          validationLevel: visualProof?.validationLevel || 'none',
+          submitAllowed: false
+        }
+      );
     }
     throw error;
   }
@@ -1243,6 +1571,10 @@ async function validatePromptInput(handle, prompt, promptFocus, insertion, stepD
     expectedHash,
     actualHash: hashText(verifiedProof.text),
     clipboardHash: expectedHash,
+    validationLevel: 'exact',
+    promptValidated: true,
+    submitAllowed: true,
+    recoveryTriggered: false,
     focusedElement: verifiedProof.focusedElement,
     composerElement: verifiedProof.element,
     proof: verifiedProof.proof,
@@ -1427,7 +1759,7 @@ function looksLikeComposerPlaceholderText(text, element) {
   return Boolean(normalizedName) && normalizedText === normalizedName;
 }
 
-async function readComposerProof(handle) {
+async function readComposerProof(handle, { allowClipboardFallback = false } = {}) {
   const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
 
   if (looksLikeComposerElement(focusedElement)) {
@@ -1461,6 +1793,9 @@ async function readComposerProof(handle) {
   } catch {
     if (!looksLikeComposerElement(focusedElement)) {
       throw new StepError('PROMPT_TARGET_INVALID', 'read-composer-proof', 'Focused element is not the ChatGPT composer while reading input proof.');
+    }
+    if (!allowClipboardFallback) {
+      throw new StepError('PROMPT_TEXT_UNAVAILABLE', 'read-composer-proof', 'UIA text read did not confirm the composer contents without destructive fallback.');
     }
 
     const priorClipboard = await getClipboardText().catch(() => ({ text: '' }));
@@ -1537,23 +1872,460 @@ async function insertPromptViaCoordinateProof(handle, prompt, promptFocus, fallb
   await pasteClipboard({ slow: true, keyDelayMs: PASTE_KEY_DELAY_MS });
   await settleAfterPaste(stepDelayMs, prompt);
   const composerProof = await readComposerProof(handle).catch(() => null);
-  const sentinel = `__codex_coordinate_probe_${crypto.randomUUID()}__`;
-  await setClipboardText(sentinel);
-  await delay(stepDelayMs);
-  await sendKeys('a', ['ctrl']);
-  await settleAfterSelectAll(stepDelayMs);
-  await sendKeys('c', ['ctrl']);
-  await settleAfterCopy(stepDelayMs);
-  const clipboard = await getClipboardText();
   const focusedElement = composerProof?.focusedElement
     || await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
   return buildCoordinateInsertionProof({
     prompt,
     composerText: composerProof?.text || '',
-    copiedText: clipboard.text || '',
+    copiedText: '',
     composerElement: composerProof?.element || null,
     focusedElement: focusedElement || composerTarget || null
   });
+}
+
+async function collectComposerVisualBaseline({
+  handle,
+  screenshotPath,
+  promptFocus,
+  prompt,
+  stepDelayMs,
+  windowRect = null
+}) {
+  if (!isLongPrompt(prompt) || !screenshotPath) {
+    return null;
+  }
+
+  const composerElement = promptFocus?.focusedElement || promptFocus?.element || null;
+  if (!looksLikeComposerElement(composerElement) || !composerElement?.rect) {
+    return null;
+  }
+
+  const snapshot = await captureComposerVisualSnapshot({
+    handle,
+    composerElement,
+    stepDelayMs,
+    windowRect,
+    windowScreenshotPath: resolveSiblingArtifactPath(screenshotPath, '.composer-pre-insert-window.png'),
+    composerScreenshotPath: resolveSiblingArtifactPath(screenshotPath, '.composer-pre-insert.png')
+  });
+
+  return {
+    composerHash: snapshot.composerHash,
+    windowRect: snapshot.windowRect,
+    composerElement: snapshot.composerElement,
+    focusedElement: snapshot.focusedElement,
+    debugArtifacts: {
+      preInsertWindowPath: snapshot.windowScreenshotPath,
+      preInsertComposerPath: snapshot.composerScreenshotPath
+    }
+  };
+}
+
+async function collectComposerVisualPromptEvidence({
+  handle,
+  prompt,
+  promptFocus,
+  insertion,
+  stepDelayMs,
+  screenshotPath,
+  windowRect = null,
+  baseline = null
+}) {
+  if (!screenshotPath) {
+    return {
+      ok: false,
+      proof: 'composerVisualProofUnavailable',
+      validationLevel: 'none',
+      debugArtifacts: null
+    };
+  }
+
+  const composerElement = await queryComposerElement(handle, 1200).catch(() => null)
+    || insertion?.composerElement
+    || insertion?.focusedElement
+    || promptFocus?.focusedElement
+    || promptFocus?.element
+    || null;
+  if (!looksLikeComposerElement(composerElement) || !composerElement?.rect) {
+    return {
+      ok: false,
+      proof: 'composerVisualTargetUnavailable',
+      validationLevel: 'none',
+      debugArtifacts: null
+    };
+  }
+
+  const snapshot = await captureComposerVisualSnapshot({
+    handle,
+    composerElement,
+    stepDelayMs,
+    windowRect: windowRect || baseline?.windowRect || null,
+    windowScreenshotPath: resolveSiblingArtifactPath(screenshotPath, '.composer-validate-window.png'),
+    composerScreenshotPath: resolveSiblingArtifactPath(screenshotPath, '.composer-validate.png')
+  });
+  const submitState = await sampleVisibleSubmitState(handle).catch(() => null);
+  const assessment = assessComposerVisualPromptEvidence({
+    prompt,
+    composerOcrTextSample: snapshot.composerOcrTextSample,
+    normalizedOcrText: snapshot.normalizedOcrText,
+    baselineHash: baseline?.composerHash || '',
+    composerHash: snapshot.composerHash,
+    focusCredible: hasCredibleComposerFocus({
+      focusedElement: snapshot.focusedElement || composerElement,
+      element: snapshot.composerElement || composerElement
+    })
+  });
+  const debugArtifacts = {
+    windowScreenshotPath: snapshot.windowScreenshotPath,
+    composerScreenshotPath: snapshot.composerScreenshotPath,
+    postInsertWindowPath: snapshot.windowScreenshotPath,
+    postInsertComposerPath: snapshot.composerScreenshotPath,
+    composerOcrTextSample: snapshot.composerOcrTextSample,
+    validationProof: assessment.proof,
+    validationLevel: assessment.validationLevel
+  };
+
+  return {
+    ok: assessment.ok,
+    proof: assessment.proof,
+    validationLevel: assessment.validationLevel,
+    markersMatched: assessment.markersMatched,
+    requiredMatches: assessment.requiredMatches,
+    submitState,
+    focusedElement: snapshot.focusedElement || insertion?.focusedElement || promptFocus?.focusedElement || null,
+    composerElement: snapshot.composerElement || composerElement,
+    composerOcrTextSample: snapshot.composerOcrTextSample,
+    debugArtifacts
+  };
+}
+
+function assessComposerVisualPromptEvidence({
+  prompt,
+  composerOcrTextSample = '',
+  normalizedOcrText = '',
+  baselineHash = '',
+  composerHash = '',
+  focusCredible = false
+}) {
+  const markerSpec = buildPromptMarkers(prompt);
+  const markersMatched = countPromptMarkers(normalizedOcrText, markerSpec.markers);
+  const placeholderOnly = looksLikeVisualComposerPlaceholder(composerOcrTextSample);
+  const visuallyChanged = Boolean(baselineHash) && baselineHash !== composerHash;
+  const hasReadableNonPlaceholderText = !placeholderOnly && normalizeMarkerText(composerOcrTextSample).length >= 12;
+  const markersMatchedProof = markersMatched >= markerSpec.requiredMatches;
+  const changedWithoutPlaceholder = !markersMatchedProof && visuallyChanged && hasReadableNonPlaceholderText && focusCredible;
+  const ok = markersMatchedProof || changedWithoutPlaceholder;
+  const proof = markersMatchedProof
+    ? 'composerVisualMarkersMatched'
+    : (changedWithoutPlaceholder
+      ? 'composerVisualChangedWithoutPlaceholder'
+      : (placeholderOnly
+        ? 'composerVisualStillPlaceholder'
+        : (visuallyChanged ? 'composerVisualChangedMarkersMissing' : 'composerVisualUnchanged')));
+
+  return {
+    ok,
+    proof,
+    validationLevel: ok ? 'visual' : 'none',
+    markersMatched,
+    requiredMatches: markerSpec.requiredMatches
+  };
+}
+
+async function captureComposerVisualSnapshot({
+  handle,
+  composerElement,
+  stepDelayMs,
+  windowRect = null,
+  windowScreenshotPath,
+  composerScreenshotPath
+}) {
+  const focusedElement = await uiaGetFocusedElement().then((result) => result.element).catch(() => null);
+  const liveComposerElement = await queryComposerElement(handle, 900).catch(() => null) || composerElement;
+  const targetWindowRect = windowRect || await getWindowRect(handle).then((result) => result.rect).catch(() => null);
+  if (!liveComposerElement?.rect || !targetWindowRect) {
+    throw new StepError(
+      ERROR_CODES.SCREENSHOT_FAILED,
+      'capture-composer-visual-proof',
+      'Composer visual proof requires a visible composer rect and window bounds.',
+      {
+        liveComposerElement,
+        targetWindowRect
+      }
+    );
+  }
+
+  const screenshotCapture = await captureStrictProofScreenshot(handle, windowScreenshotPath, stepDelayMs);
+  const cropRect = computeComposerCropRect(targetWindowRect, liveComposerElement.rect);
+  const cropResult = await cropImage(screenshotCapture.screenshotPath, cropRect, composerScreenshotPath);
+  const ocrResult = await ocrImageText(cropResult.imagePath).catch(() => ({ text: '' }));
+  const composerOcrTextSample = String(ocrResult?.text || '').slice(0, 240);
+
+  return {
+    windowScreenshotPath: screenshotCapture.screenshotPath,
+    composerScreenshotPath: path.resolve(cropResult.imagePath || composerScreenshotPath),
+    composerHash: await hashFile(cropResult.imagePath || composerScreenshotPath).catch(() => ''),
+    composerOcrTextSample,
+    normalizedOcrText: normalizeMarkerText(composerOcrTextSample),
+    windowRect: screenshotCapture.rect || targetWindowRect,
+    cropRect: cropResult.rect || cropRect,
+    composerElement: liveComposerElement,
+    focusedElement
+  };
+}
+
+function computeComposerCropRect(windowRect = {}, composerRect = {}) {
+  const relativeX = Math.max(0, Math.round(Number(composerRect.x || 0) - Number(windowRect.x || 0) - COMPOSER_CROP_PADDING_X));
+  const relativeY = Math.max(0, Math.round(Number(composerRect.y || 0) - Number(windowRect.y || 0) - COMPOSER_CROP_PADDING_TOP));
+  const maxWidth = Math.max(0, Math.round(Number(windowRect.width || 0) - relativeX));
+  const maxHeight = Math.max(0, Math.round(Number(windowRect.height || 0) - relativeY));
+  const desiredWidth = Math.max(0, Math.round(Number(composerRect.width || 0) + (COMPOSER_CROP_PADDING_X * 2)));
+  const desiredHeight = Math.max(
+    COMPOSER_CROP_MIN_HEIGHT,
+    Math.round(Number(composerRect.height || 0) + COMPOSER_CROP_PADDING_TOP + COMPOSER_CROP_PADDING_BOTTOM)
+  );
+
+  return {
+    x: relativeX,
+    y: relativeY,
+    width: Math.max(1, Math.min(maxWidth, desiredWidth)),
+    height: Math.max(1, Math.min(maxHeight, desiredHeight))
+  };
+}
+
+function buildPromptMarkers(prompt) {
+  const lines = String(prompt || '')
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => normalizeMarkerText(line))
+    .filter(Boolean);
+  const normalizedPrompt = normalizeMarkerText(prompt);
+
+  if (lines.length <= 1 && normalizedPrompt) {
+    return {
+      requiredMatches: 1,
+      markers: [normalizedPrompt]
+    };
+  }
+
+  const firstLine = lines[0] || '';
+  const lastLine = lines[lines.length - 1] || '';
+  const longestLine = lines.slice().sort((left, right) => right.length - left.length)[0] || '';
+  const markers = [
+    firstLine.slice(0, 48),
+    lastLine.slice(Math.max(0, lastLine.length - 48)),
+    longestLine.slice(0, 48)
+  ]
+    .map((marker) => marker.trim())
+    .filter((marker, index, array) => marker.length >= 12 && array.indexOf(marker) === index);
+
+  return {
+    requiredMatches: Math.min(2, markers.length || 1),
+    markers: markers.length ? markers : [normalizedPrompt.slice(0, Math.min(normalizedPrompt.length, 48))]
+  };
+}
+
+function countPromptMarkers(text, markers = []) {
+  const haystack = normalizeMarkerText(text);
+  return markers.filter((marker) => marker && haystack.includes(normalizeMarkerText(marker))).length;
+}
+
+function normalizeMarkerText(text) {
+  return String(text || '')
+    .replace(/\r/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function looksLikeVisualComposerPlaceholder(text) {
+  const normalized = normalizeMarkerText(text);
+  if (!normalized) {
+    return true;
+  }
+  return [
+    'chatgpt와 채팅',
+    'message chatgpt',
+    '메시지 chatgpt',
+    '무엇이든 물어보세요'
+  ].some((placeholder) => normalized === placeholder || normalized.includes(placeholder));
+}
+
+function resolveSiblingArtifactPath(basePath, suffix) {
+  const parsed = path.parse(path.resolve(basePath));
+  return path.join(parsed.dir, `${parsed.name}${suffix}`);
+}
+
+function mergeDebugArtifacts(base = null, extra = null) {
+  const merged = {
+    ...(base || {}),
+    ...(extra || {})
+  };
+  const normalized = Object.fromEntries(
+    Object.entries(merged).filter(([, value]) => value !== null && value !== undefined && value !== '')
+  );
+  return Object.keys(normalized).length ? normalized : null;
+}
+
+function extractDebugArtifactsFromError(error) {
+  const details = error?.details || {};
+  const explicit = mergeDebugArtifacts(null, details.debugArtifacts || null);
+  if (explicit) {
+    return explicit;
+  }
+
+  if (error?.code === ERROR_CODES.STRICT_PROOF_FAILED) {
+    return mergeDebugArtifacts(null, {
+      windowScreenshotPath: details.screenshotPath || details.preSubmitBaseline?.screenshotPath || null,
+      submitProbeWindowPath: details.screenshotPath || details.preSubmitBaseline?.screenshotPath || null,
+      composerScreenshotPath: null,
+      composerOcrTextSample: details.ocrProof?.ocrText?.slice(0, 240) || details.preSubmitBaseline?.ocrTextSample || null,
+      validationProof: details.postSubmitAssessment?.proof || 'strictProofFailed',
+      validationLevel: 'none'
+    });
+  }
+
+  return null;
+}
+
+async function attemptBoundedVisiblePasteRecovery({
+  handle,
+  prompt,
+  promptFocus,
+  insertion,
+  stepDelayMs,
+  screenshotPath,
+  windowRect = null,
+  baseline = null,
+  error,
+  attemptIndex = 2,
+  logEvent = async () => {},
+  syncAutomationContext = async () => {}
+}) {
+  if (!isSoftRecoveryEligible(error)) {
+    return { ok: false };
+  }
+
+  await syncAutomationContext('bounded-submit-recovery', phaseForDesktopStep(error?.step || 'validate-prompt'), attemptIndex).catch(() => {});
+  const refocusedElement = await refocusComposer(handle, promptFocus, stepDelayMs)
+    .catch(() => promptFocus?.focusedElement || promptFocus?.element || null);
+  const visualProof = await collectComposerVisualPromptEvidence({
+    handle,
+    prompt,
+    promptFocus: {
+      ...promptFocus,
+      focusedElement: refocusedElement || promptFocus?.focusedElement || null
+    },
+    insertion,
+    stepDelayMs,
+    screenshotPath,
+    windowRect,
+    baseline
+  }).catch(() => null);
+  const submitState = visualProof?.submitState || await sampleVisibleSubmitState(handle).catch(() => null);
+  const focusCredible = hasCredibleComposerFocus({
+    focusedElement: visualProof?.focusedElement || refocusedElement || promptFocus?.focusedElement || null,
+    element: visualProof?.composerElement || refocusedElement || promptFocus?.element || null
+  });
+  const nonPlaceholderVisual = Boolean(visualProof?.composerOcrTextSample)
+    && !looksLikeVisualComposerPlaceholder(visualProof.composerOcrTextSample);
+  const promptValidated = visualProof?.ok === true;
+  const submitAllowed = focusCredible && (
+    promptValidated
+    || (hasVisibleSendableState(submitState) && nonPlaceholderVisual)
+  );
+  const debugArtifacts = mergeDebugArtifacts(
+    visualProof?.debugArtifacts || null,
+    {
+      submitProbeWindowPath: visualProof?.debugArtifacts?.postInsertWindowPath
+        || visualProof?.debugArtifacts?.windowScreenshotPath
+        || null,
+      validationProof: visualProof?.proof || error?.details?.validationProof || error?.code || 'boundedRecoveryUnproven',
+      validationLevel: promptValidated ? 'visual' : 'none'
+    }
+  );
+
+  await logEvent({
+    step: 'bounded-submit-recovery',
+    phase: phaseForDesktopStep(error?.step || 'validate-prompt'),
+    attemptIndex,
+    recovery: {
+      triggerCode: error?.code || 'UNEXPECTED_ERROR',
+      triggerStep: error?.step || 'unknown',
+      promptValidated,
+      submitAllowed,
+      focusCredible,
+      visualProof: visualProof?.proof || 'none',
+      submitState,
+      debugArtifacts
+    }
+  }).catch(() => {});
+
+  if (!submitAllowed) {
+    return { ok: false, debugArtifacts };
+  }
+
+  return {
+    ok: true,
+    validation: {
+      method: `${insertion?.method || 'unknown'}+bounded-visible-recovery`,
+      expectedHash: hashText(prompt),
+      actualHash: promptValidated ? hashText(prompt) : (insertion?.actualHash || ''),
+      clipboardHash: promptValidated ? hashText(prompt) : (insertion?.actualHash || ''),
+      validationLevel: promptValidated ? 'visual' : 'none',
+      promptValidated,
+      submitAllowed,
+      recoveryTriggered: true,
+      focusedElement: visualProof?.focusedElement || refocusedElement || promptFocus?.focusedElement || null,
+      composerElement: visualProof?.composerElement || refocusedElement || promptFocus?.element || null,
+      proof: promptValidated ? visualProof.proof : 'visibleSendableRecoveryHint',
+      composerTextSample: String(visualProof?.composerOcrTextSample || insertion?.composerTextSample || '').slice(0, 200),
+      beforeSubmitState: insertion?.beforeSubmitState || null,
+      afterSubmitState: submitState || insertion?.afterSubmitState || insertion?.beforeSubmitState || null,
+      visibleSendStateProven: Boolean(submitState?.sendable),
+      debugArtifacts
+    }
+  };
+}
+
+function isSoftRecoveryEligible(error) {
+  const code = String(error?.code || '').toUpperCase();
+  const step = String(error?.step || '').toLowerCase();
+  if (code === 'PROMPT_VALIDATION_FAILED' || code === 'PROMPT_TEXT_UNAVAILABLE' || code === 'SUBMIT_PRECHECK_FAILED') {
+    return true;
+  }
+  return code === 'SUBMIT_FAILED' && step === 'submit-prompt';
+}
+
+function classifyDesktopFailure(error, lastStep = '') {
+  const code = String(error?.code || '').toUpperCase();
+  const step = String(lastStep || error?.step || '').toLowerCase();
+
+  if (code === 'PROMPT_VALIDATION_FAILED' || step === 'validate-prompt') return 'prompt-validation-failed';
+  if (code === 'SUBMIT_PRECHECK_FAILED' || step === 'submit-prompt-precheck') return 'submit-gate-failed';
+  if (code === ERROR_CODES.STRICT_PROOF_FAILED) return 'strict-proof-failed';
+  if (code === ERROR_CODES.WINDOW_SURFACE_FAILED) return 'surface-failed';
+  if (code === ERROR_CODES.NEW_CHAT_FAILED) return 'new-chat-failed';
+  if (code === ERROR_CODES.MODE_SELECTION_FAILED) return 'mode-selection-failed';
+  if (code === 'WORKER_TIMEOUT' || code === 'WINDOWS_AUTOMATION_FAILED') return 'worker-failed';
+  if (code === ERROR_CODES.SCREENSHOT_FAILED) return 'screenshot-failed';
+  return 'unexpected-failure';
+}
+
+function phaseForDesktopStep(step = '') {
+  const value = String(step || '').toLowerCase();
+  if (!value || value === 'init') return 'init';
+  if (['select-window'].includes(value)) return 'seed-window';
+  if (['create-surface', 'focus-window', 'normalize-window', 'verify-fresh-surface'].includes(value)) return 'surface-create';
+  if (['navigate-chatgpt', 'verify-url-after-navigation', 'dismiss-interstitials', 'normalize-zoom', 'start-new-chat', 'select-mode'].includes(value)) return 'navigate';
+  if (['focus-prompt', 'capture-composer-baseline', 'refocus-composer'].includes(value)) return 'prompt-focus';
+  if (['insert-prompt'].includes(value)) return 'prompt-insert';
+  if (['validate-prompt', 'bounded-submit-recovery'].includes(value)) return 'prompt-validate';
+  if (['strict-pre-submit-baseline', 'submit-prompt-precheck'].includes(value)) return 'submit-gate';
+  if (['submit-prompt', 'visible-send-state'].includes(value)) return 'submit-attempt';
+  if (['strict-submit-proof', 'capture-screenshot'].includes(value)) return 'strict-proof';
+  if (value === 'failure') return 'failure';
+  return 'misc';
 }
 
 function normalizeComposerText(text) {
@@ -1898,10 +2670,12 @@ async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, val
   const validatedHashMatched = validatedInput?.actualHash === hashText(prompt);
   const promptFocusLooksCredible = hasCredibleComposerFocus(promptFocus);
 
-  if (shouldTrustValidatedPromptForSubmit(validatedHashMatched, promptFocus)) {
+  if (shouldTrustValidatedPromptForSubmit(validatedInput, promptFocus)) {
     const validatedSubmitState = validatedInput?.afterSubmitState || validatedInput?.beforeSubmitState || null;
     return {
-      proof: 'validatedInputHashMatchedAndComposerCredible',
+      proof: 'validatedInputTrustedAndComposerCredible',
+      promptValidated: validatedInput?.promptValidated === true,
+      submitAllowed: validatedInput?.submitAllowed === true,
       sample: {
         stage: 'before',
         prompt,
@@ -1922,9 +2696,19 @@ async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, val
     attempts: 5,
     delayMs: stepDelayMs,
     verify: async () => {
-      const proof = await readComposerProof(handle);
+      const proof = await readComposerProof(handle).catch((proofError) => {
+        if (proofError instanceof StepError && proofError.code === 'PROMPT_TEXT_UNAVAILABLE') {
+          return {
+            text: '',
+            element: validatedInput?.composerElement || promptFocus?.element || null,
+            focusedElement: validatedInput?.focusedElement || promptFocus?.focusedElement || null
+          };
+        }
+        throw proofError;
+      });
       const proofLooksCredible = hasCredibleComposerFocus(proof);
-      const validatedReady = validatedHashMatched && (proofLooksCredible || promptFocusLooksCredible);
+      const validatedReady = shouldTrustValidatedPromptForSubmit(validatedInput, promptFocus, proof)
+        || (validatedHashMatched && (proofLooksCredible || promptFocusLooksCredible));
       const submitButton = validatedReady ? null : await findSubmitButton(handle);
       ensurePromptTargetLooksCredible({
         promptFocus,
@@ -1950,7 +2734,9 @@ async function verifyReadyToSubmit(handle, prompt, promptFocus, stepDelayMs, val
         ok: promptPresent || validatedReady,
         proof: promptPresent
           ? (sendable ? 'composerContainsPromptAndSendable' : 'composerContainsPromptSubmitStateDegraded')
-          : (validatedReady ? 'validatedInputHashMatchedAndComposerCredible' : 'composerMissingExpectedPrompt'),
+          : (validatedReady ? 'validatedInputTrustedAndComposerCredible' : 'composerMissingExpectedPrompt'),
+        promptValidated: promptPresent || validatedInput?.promptValidated === true,
+        submitAllowed: validatedReady,
         sample
       };
     },
@@ -1988,22 +2774,38 @@ function hasVisibleSendableState(state) {
   return Boolean(state?.sendable) || isSendableSubmitState(state?.submitButton);
 }
 
-function shouldTrustValidatedPromptForSubmit(validatedHashMatched, promptFocus, proof = null) {
-  return Boolean(validatedHashMatched) && (hasCredibleComposerFocus(proof) || hasCredibleComposerFocus(promptFocus));
+function shouldTrustValidatedPromptForSubmit(validatedInput, promptFocus, proof = null) {
+  const legacyValidatedHashMatched = typeof validatedInput === 'boolean' ? validatedInput : null;
+  const validationLevel = String(validatedInput?.validationLevel || '').toLowerCase();
+  const validatedHashMatched = legacyValidatedHashMatched ?? (
+    Boolean(validatedInput?.expectedHash) && validatedInput?.actualHash === validatedInput?.expectedHash
+  );
+  const trustworthyValidation = validatedInput?.submitAllowed === true
+    || validationLevel === 'visual'
+    || validatedHashMatched;
+  return trustworthyValidation && (hasCredibleComposerFocus(proof) || hasCredibleComposerFocus(promptFocus));
 }
 
 function shouldUseFastEnterSubmitPath(method, ready, before) {
   return method === 'enter'
-    && ready?.proof === 'validatedInputHashMatchedAndComposerCredible'
+    && ready?.proof === 'validatedInputTrustedAndComposerCredible'
     && !isSendableSubmitState(before?.submitButton);
 }
 
 function shouldReprimePromptBeforeSubmit(validatedInput, ready, before) {
-  if (ready?.proof !== 'validatedInputHashMatchedAndComposerCredible') {
+  if (ready?.proof !== 'validatedInputTrustedAndComposerCredible') {
     return false;
   }
 
   if (isSendableSubmitState(before?.submitButton)) {
+    return false;
+  }
+
+  if (String(validatedInput?.validationLevel || '').toLowerCase() === 'visual') {
+    return false;
+  }
+
+  if (validatedInput?.submitAllowed === true && String(validatedInput?.validationLevel || '').toLowerCase() === 'none') {
     return false;
   }
 
@@ -2321,15 +3123,21 @@ export const __desktopSubmitInternals = {
   isChatGptUrl,
   looksLikePromptEcho,
   buildCoordinateInsertionProof,
+  buildPromptMarkers,
   looksLikeComposerPlaceholderText,
+  looksLikeVisualComposerPlaceholder,
   normalizeComposerText,
   normalizePromptForSubmission,
+  normalizeMarkerText,
   isLongPrompt,
   shouldTrustFocusSafeHashProof,
   hasCredibleComposerFocus,
   shouldTrustValidatedPromptForSubmit,
   shouldReprimePromptBeforeSubmit,
   shouldUseFastEnterSubmitPath,
+  assessComposerVisualPromptEvidence,
+  computeComposerCropRect,
+  countPromptMarkers,
   deriveSubmitProof,
   hasVisibleSendStateTransition,
   buildSubmitAttemptOrder,
@@ -2345,5 +3153,8 @@ export const __desktopSubmitInternals = {
   pickOpenedBrowserWindow,
   resolveDesktopScreenshotPath,
   resolveStrictBaselineScreenshotPath,
-  isRectClose
+  isRectClose,
+  classifyDesktopFailure,
+  phaseForDesktopStep,
+  isSoftRecoveryEligible
 };

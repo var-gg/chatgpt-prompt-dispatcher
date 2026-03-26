@@ -117,6 +117,17 @@ function Write-WorkerLog($event) {
   }
 }
 
+function Get-AutomationContextValue($params, [string]$key) {
+  if (-not $params) { return $null }
+  if ($params.PSObject.Properties.Name -contains 'automationContext') {
+    $context = $params.automationContext
+    if ($context -and $context.PSObject.Properties.Name -contains $key) {
+      return $context.$key
+    }
+  }
+  return $null
+}
+
 function New-ErrorResult($code, $message, $data = $null) {
   $err = @{ code = $code; message = $message }
   if ($null -ne $data) { $err.data = $data }
@@ -424,6 +435,61 @@ function Save-WindowScreenshot($window, [string]$screenshotPath) {
   }
 }
 
+function Save-ImageCrop([string]$imagePath, $cropRect, [string]$outputPath) {
+  if ([string]::IsNullOrWhiteSpace($imagePath)) {
+    throw (New-ErrorResult 'IMAGE_PATH_REQUIRED' 'Source image path is required for crop.')
+  }
+  if (-not (Test-Path -LiteralPath $imagePath)) {
+    throw (New-ErrorResult 'IMAGE_NOT_FOUND' 'Source image path for crop was not found.' @{ imagePath = $imagePath })
+  }
+  if ([string]::IsNullOrWhiteSpace($outputPath)) {
+    throw (New-ErrorResult 'IMAGE_CROP_PATH_REQUIRED' 'Output path is required for crop.')
+  }
+
+  $sourceBitmap = $null
+  $targetBitmap = $null
+  $graphics = $null
+
+  try {
+    $sourceBitmap = [System.Drawing.Bitmap]::FromFile($imagePath)
+    $sourceWidth = [int]$sourceBitmap.Width
+    $sourceHeight = [int]$sourceBitmap.Height
+
+    $rawX = [int]($cropRect.x)
+    $rawY = [int]($cropRect.y)
+    $rawWidth = [int]($cropRect.width)
+    $rawHeight = [int]($cropRect.height)
+    $x = [Math]::Max(0, $rawX)
+    $y = [Math]::Max(0, $rawY)
+    $width = [Math]::Min([Math]::Max(0, $rawWidth), [Math]::Max(0, $sourceWidth - $x))
+    $height = [Math]::Min([Math]::Max(0, $rawHeight), [Math]::Max(0, $sourceHeight - $y))
+    if ($width -le 0 -or $height -le 0) {
+      throw (New-ErrorResult 'IMAGE_CROP_INVALID' 'Crop rect is invalid for the source image.' @{
+        imagePath = $imagePath
+        cropRect = $cropRect
+        imageBounds = @{ width = $sourceWidth; height = $sourceHeight }
+      })
+    }
+
+    [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($outputPath)) | Out-Null
+    $targetBitmap = New-Object System.Drawing.Bitmap $width, $height
+    $graphics = [System.Drawing.Graphics]::FromImage($targetBitmap)
+    $destinationRect = [System.Drawing.Rectangle]::new(0, 0, $width, $height)
+    $sourceRect = [System.Drawing.Rectangle]::new($x, $y, $width, $height)
+    $graphics.DrawImage($sourceBitmap, $destinationRect, $sourceRect, [System.Drawing.GraphicsUnit]::Pixel)
+    $targetBitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+
+    return @{
+      imagePath = $outputPath
+      rect = @{ x = $x; y = $y; width = $width; height = $height }
+    }
+  } finally {
+    if ($graphics) { $graphics.Dispose() }
+    if ($targetBitmap) { $targetBitmap.Dispose() }
+    if ($sourceBitmap) { $sourceBitmap.Dispose() }
+  }
+}
+
 function Invoke-WinRtAsTask([object]$operation, [type[]]$genericTypes = @()) {
   $methods = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
     $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1
@@ -505,6 +571,9 @@ function Invoke-Method($method, $params) {
     }
     'ocrImageText' {
       return @{ text = (Invoke-OcrImageText ([string]$params.imagePath)) }
+    }
+    'cropImage' {
+      return (Save-ImageCrop ([string]$params.imagePath) $params.cropRect ([string]$params.outputPath))
     }
     'launchBrowserWindow' {
       $window = Resolve-Window $params
@@ -703,7 +772,20 @@ function Invoke-Method($method, $params) {
         $pattern = $focused.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
         $pattern.SetValue([string]$params.value)
       } catch {
-        throw (New-ErrorResult 'UIA_SET_VALUE_FAILED' 'Focused UI Automation element does not support ValuePattern.SetValue().' @{ valuePreview = ([string]$params.value).Substring(0, [Math]::Min(([string]$params.value).Length, 80)) })
+        $valueText = [string]$params.value
+        $valueHash = ''
+        try {
+          $sha = [System.Security.Cryptography.SHA256]::Create()
+          $bytes = [System.Text.Encoding]::UTF8.GetBytes($valueText)
+          $hashBytes = $sha.ComputeHash($bytes)
+          $valueHash = ([System.BitConverter]::ToString($hashBytes)).Replace('-', '').ToLowerInvariant()
+        } catch {
+          $valueHash = ''
+        }
+        throw (New-ErrorResult 'UIA_SET_VALUE_FAILED' 'Focused UI Automation element does not support ValuePattern.SetValue().' @{
+          valueHash = $valueHash
+          valueLength = $valueText.Length
+        })
       }
       Start-Sleep -Milliseconds 120
       return @{ element = (Convert-UiaElement $focused); text = (Read-UiaText $focused) }
@@ -737,14 +819,41 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
   if ([string]::IsNullOrWhiteSpace($line)) { continue }
   $request = $null
   try {
+    $startedAt = [DateTime]::UtcNow
     $request = $line | ConvertFrom-Json
     $id = $request.id
     $method = [string]$request.method
     $params = if ($request.PSObject.Properties.Name -contains 'params') { $request.params } else { @{} }
-    Write-WorkerLog @{ event = 'request'; id = $id; method = $method }
+    $runId = Get-AutomationContextValue $params 'runId'
+    $attemptIndex = Get-AutomationContextValue $params 'attemptIndex'
+    $phase = Get-AutomationContextValue $params 'phase'
+    $step = Get-AutomationContextValue $params 'step'
+    $targetWindowHandle = Get-AutomationContextValue $params 'targetWindowHandle'
+    Write-WorkerLog @{
+      event = 'request'
+      id = $id
+      method = $method
+      runId = $runId
+      attemptIndex = $attemptIndex
+      phase = $phase
+      step = $step
+      targetWindowHandle = $targetWindowHandle
+    }
     $result = Invoke-Method $method $params
     Write-JsonLine @{ jsonrpc = '2.0'; id = $id; result = $result }
-    Write-WorkerLog @{ event = 'response'; id = $id; method = $method; ok = $true }
+    $durationMs = [int]([DateTime]::UtcNow - $startedAt).TotalMilliseconds
+    Write-WorkerLog @{
+      event = 'response'
+      id = $id
+      method = $method
+      ok = $true
+      durationMs = $durationMs
+      runId = $runId
+      attemptIndex = $attemptIndex
+      phase = $phase
+      step = $step
+      targetWindowHandle = $targetWindowHandle
+    }
   } catch {
     $id = if ($request) { $request.id } else { $null }
     $payload = $null
@@ -754,8 +863,21 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     if (-not $payload) {
       $payload = @{ code = 'WORKER_ERROR'; message = $_.Exception.Message }
     }
+    $durationMs = if ($startedAt) { [int]([DateTime]::UtcNow - $startedAt).TotalMilliseconds } else { 0 }
     Write-JsonLine @{ jsonrpc = '2.0'; id = $id; error = $payload }
-    Write-WorkerLog @{ event = 'response'; id = $id; ok = $false; code = $payload.code; message = $payload.message }
+    Write-WorkerLog @{
+      event = 'response'
+      id = $id
+      ok = $false
+      code = $payload.code
+      message = $payload.message
+      durationMs = $durationMs
+      runId = Get-AutomationContextValue $params 'runId'
+      attemptIndex = Get-AutomationContextValue $params 'attemptIndex'
+      phase = Get-AutomationContextValue $params 'phase'
+      step = Get-AutomationContextValue $params 'step'
+      targetWindowHandle = Get-AutomationContextValue $params 'targetWindowHandle'
+    }
   }
 }
 

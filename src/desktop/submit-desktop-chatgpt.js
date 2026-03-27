@@ -53,6 +53,10 @@ const COMPOSER_FOCUS_SETTLE_MS = 220;
 const PASTE_KEY_DELAY_MS = 90;
 const POST_PASTE_SETTLE_MS = 320;
 const LONG_PROMPT_PASTE_SETTLE_MS = 900;
+const LONG_PROMPT_CHUNK_PASTE_THRESHOLD = 900;
+const LONG_PROMPT_CHUNK_LINE_THRESHOLD = 20;
+const LONG_PROMPT_CLIPBOARD_CHUNK_SIZE = 240;
+const LONG_PROMPT_TYPED_CHUNK_SIZE = 120;
 const SELECT_ALL_SETTLE_MS = 250;
 const CLIPBOARD_COPY_SETTLE_MS = 400;
 const NEW_WINDOW_DETECT_ATTEMPTS = 18;
@@ -1347,7 +1351,7 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs, visualCont
     || pointFromElementRect(promptFocus?.element?.rect)
     || null;
 
-  if (!isLongPrompt(prompt)) {
+  if (shouldAttemptValueSetInsert(prompt)) {
     try {
       const composerTarget = await refocusComposer(handle, promptFocus, stepDelayMs);
       await clickComposerCenter(composerTarget, pointFromElementRect(composerTarget?.rect));
@@ -1387,11 +1391,24 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs, visualCont
     await clearComposer(stepDelayMs);
   }
   await setClipboardText(prompt);
-  await waitForClipboardReady(prompt, stepDelayMs);
-  await pasteClipboard({ slow: true, keyDelayMs: PASTE_KEY_DELAY_MS });
-  await settleAfterPaste(stepDelayMs, prompt);
+  if (shouldUseChunkedClipboardInsert(prompt)) {
+    await pastePromptInChunks(prompt, stepDelayMs, {
+      composerTarget,
+      promptFocus,
+      fallbackPoint: coordinateFallbackPoint,
+      mode: 'clipboard'
+    });
+  } else {
+    await waitForClipboardReady(prompt, stepDelayMs);
+    await pasteClipboard({ slow: true, keyDelayMs: PASTE_KEY_DELAY_MS });
+    await settleAfterPaste(stepDelayMs, prompt);
+  }
 
-  const promptProof = await waitForPromptPresence(handle, prompt, stepDelayMs, 'uia-focus+single-clipboard-paste')
+  const basePasteMethod = shouldUseChunkedClipboardInsert(prompt)
+    ? 'uia-focus+chunked-clipboard-paste'
+    : 'uia-focus+single-clipboard-paste';
+
+  const promptProof = await waitForPromptPresence(handle, prompt, stepDelayMs, basePasteMethod)
     .catch(() => null);
   const bestComposerProof = promptProof?.ok
     ? promptProof
@@ -1399,14 +1416,14 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs, visualCont
       text: '',
       element: composerTarget || promptFocus?.element || null,
       focusedElement: composerTarget || promptFocus?.focusedElement || null,
-      proof: 'uia-focus+single-clipboard-paste+composerTextPending'
+      proof: `${basePasteMethod}+composerTextPending`
     }));
   const visibleProof = await waitForVisibleSendState(
     handle,
     prompt,
     beforeSubmitState,
     stepDelayMs,
-    'uia-focus+single-clipboard-paste'
+    basePasteMethod
   );
   const postPasteVisualProof = await collectComposerVisualPromptEvidence({
     handle,
@@ -1432,9 +1449,21 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs, visualCont
   })) {
     await clickComposerCenter(composerTarget, coordinateFallbackPoint);
     await settleAfterComposerFocus(stepDelayMs);
-    await sendText(prompt);
-    await settleAfterPaste(stepDelayMs, prompt);
-    const typedPromptProof = await waitForPromptPresence(handle, prompt, stepDelayMs, 'uia-focus+single-clipboard-paste+unicode-type-fallback')
+    const typedFallbackBaseMethod = shouldUseChunkedTypedInsert(prompt)
+      ? `${basePasteMethod}+chunked-unicode-type-fallback`
+      : `${basePasteMethod}+unicode-type-fallback`;
+    if (shouldUseChunkedTypedInsert(prompt)) {
+      await pastePromptInChunks(prompt, stepDelayMs, {
+        composerTarget,
+        promptFocus,
+        fallbackPoint: coordinateFallbackPoint,
+        mode: 'type'
+      });
+    } else {
+      await sendText(prompt);
+      await settleAfterPaste(stepDelayMs, prompt);
+    }
+    const typedPromptProof = await waitForPromptPresence(handle, prompt, stepDelayMs, typedFallbackBaseMethod)
       .catch(() => null);
     const typedComposerProof = typedPromptProof?.ok
       ? typedPromptProof
@@ -1442,23 +1471,23 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs, visualCont
         text: '',
         element: composerTarget || promptFocus?.element || null,
         focusedElement: composerTarget || promptFocus?.focusedElement || null,
-        proof: 'uia-focus+single-clipboard-paste+unicode-type-fallback+composerTextPending'
+        proof: `${typedFallbackBaseMethod}+composerTextPending`
       }));
     const typedVisibleProof = await waitForVisibleSendState(
       handle,
       prompt,
       beforeSubmitState,
       stepDelayMs,
-      'uia-focus+single-clipboard-paste+unicode-type-fallback'
+      typedFallbackBaseMethod
     );
     return mergePromptInsertionProof({
-      baseMethod: 'uia-focus+single-clipboard-paste+unicode-type-fallback',
+      baseMethod: typedFallbackBaseMethod,
       expectedHash,
       promptProof: {
         text: typedComposerProof?.text || '',
         element: typedComposerProof?.element || composerTarget || null,
         focusedElement: typedComposerProof?.focusedElement || composerTarget || null,
-        proof: typedComposerProof?.proof || 'uia-focus+single-clipboard-paste+unicode-type-fallback+composerTextPending'
+        proof: typedComposerProof?.proof || `${typedFallbackBaseMethod}+composerTextPending`
       },
       visibleProof: typedVisibleProof,
       beforeSubmitState
@@ -1466,13 +1495,13 @@ async function insertPrompt(handle, prompt, promptFocus, stepDelayMs, visualCont
   }
 
   return mergePromptInsertionProof({
-    baseMethod: 'uia-focus+single-clipboard-paste',
+    baseMethod: basePasteMethod,
     expectedHash,
     promptProof: {
       text: bestComposerProof?.text || '',
       element: bestComposerProof?.element || composerTarget || null,
       focusedElement: bestComposerProof?.focusedElement || composerTarget || null,
-      proof: bestComposerProof?.proof || 'uia-focus+single-clipboard-paste+composerTextPending'
+      proof: bestComposerProof?.proof || `${basePasteMethod}+composerTextPending`
     },
     visibleProof,
     beforeSubmitState
@@ -1850,6 +1879,69 @@ function shouldUseTypedInsertFallback({
     || looksLikeComposerPlaceholderText(normalizedText, promptProof?.element || composerTarget || promptFocus?.element || null)
     || looksLikeVisualComposerPlaceholder(normalizedText)
   );
+}
+
+function shouldAttemptValueSetInsert(prompt) {
+  return String(prompt || '').trim().length > 0;
+}
+
+function shouldUseChunkedClipboardInsert(prompt) {
+  const text = String(prompt || '');
+  const lineCount = text ? text.split('\n').length : 0;
+  return text.length > LONG_PROMPT_CHUNK_PASTE_THRESHOLD || lineCount > LONG_PROMPT_CHUNK_LINE_THRESHOLD;
+}
+
+function shouldUseChunkedTypedInsert(prompt) {
+  return shouldUseChunkedClipboardInsert(prompt);
+}
+
+function splitPromptIntoChunks(prompt, chunkSize) {
+  const codepoints = Array.from(String(prompt || ''));
+  if (codepoints.length <= chunkSize) {
+    return [String(prompt || '')];
+  }
+
+  const chunks = [];
+  for (let index = 0; index < codepoints.length; index += chunkSize) {
+    chunks.push(codepoints.slice(index, index + chunkSize).join(''));
+  }
+  return chunks;
+}
+
+async function pastePromptInChunks(prompt, stepDelayMs, options = {}) {
+  const {
+    composerTarget = null,
+    promptFocus = null,
+    fallbackPoint = null,
+    mode = 'clipboard'
+  } = options;
+  const chunks = splitPromptIntoChunks(
+    prompt,
+    mode === 'type' ? LONG_PROMPT_TYPED_CHUNK_SIZE : LONG_PROMPT_CLIPBOARD_CHUNK_SIZE
+  );
+
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
+    await clickComposerEnd(
+      composerTarget,
+      fallbackPoint
+        || pointFromElementRect(composerTarget?.rect)
+        || pointFromElementRect(promptFocus?.focusedElement?.rect)
+        || pointFromElementRect(promptFocus?.element?.rect)
+    ).catch(() => {});
+    await settleAfterComposerFocus(stepDelayMs);
+    if (mode === 'clipboard') {
+      await setClipboardText(chunk);
+      await waitForClipboardReady(chunk, stepDelayMs);
+      await pasteClipboard({ slow: true, keyDelayMs: PASTE_KEY_DELAY_MS });
+    } else {
+      await sendText(chunk);
+    }
+    await settleAfterPaste(stepDelayMs, chunk);
+    if (index < chunks.length - 1) {
+      await delay(Math.max(80, Math.min(stepDelayMs, 180)));
+    }
+  }
 }
 
 async function settleAfterComposerFocus(stepDelayMs) {
@@ -3307,5 +3399,9 @@ export const __desktopSubmitInternals = {
   classifyDesktopFailure,
   phaseForDesktopStep,
   isSoftRecoveryEligible,
-  shouldUseTypedInsertFallback
+  shouldUseTypedInsertFallback,
+  shouldAttemptValueSetInsert,
+  shouldUseChunkedClipboardInsert,
+  shouldUseChunkedTypedInsert,
+  splitPromptIntoChunks
 };

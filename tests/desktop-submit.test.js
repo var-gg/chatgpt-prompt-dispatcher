@@ -27,6 +27,10 @@ const {
   buildSubmitAttemptOrder,
   shouldUseFastEnterSubmitPath,
   shouldUseTypedInsertFallback,
+  shouldAttemptValueSetInsert,
+  shouldUseChunkedClipboardInsert,
+  shouldUseChunkedTypedInsert,
+  splitPromptIntoChunks,
   looksLikeStopButton,
   hashText,
   normalizeAddressValue,
@@ -234,6 +238,28 @@ test('isLongPrompt prefers the dedicated fast path for multiline or large prompt
   assert.equal(isLongPrompt('짧은 요청'), false);
   assert.equal(isLongPrompt('line1\nline2'), true);
   assert.equal(isLongPrompt('x'.repeat(900)), true);
+});
+
+test('shouldAttemptValueSetInsert stays enabled for long prompts before clipboard fallback', () => {
+  assert.equal(shouldAttemptValueSetInsert('짧은 요청'), true);
+  assert.equal(shouldAttemptValueSetInsert('x'.repeat(1500)), true);
+  assert.equal(shouldAttemptValueSetInsert('   '), false);
+});
+
+test('shouldUseChunkedClipboardInsert only activates for genuinely large multiline prompts', () => {
+  assert.equal(shouldUseChunkedClipboardInsert('짧은 요청'), false);
+  assert.equal(shouldUseChunkedClipboardInsert('줄1\n줄2\n줄3'), false);
+  assert.equal(shouldUseChunkedClipboardInsert('x'.repeat(950)), true);
+  assert.equal(shouldUseChunkedClipboardInsert(Array.from({ length: 24 }, (_, index) => `줄 ${index + 1}`).join('\n')), true);
+  assert.equal(shouldUseChunkedTypedInsert('x'.repeat(950)), true);
+});
+
+test('splitPromptIntoChunks preserves content while respecting the requested chunk size', () => {
+  const prompt = '가나다라마바사아자차카타파하'.repeat(20);
+  const chunks = splitPromptIntoChunks(prompt, 25);
+  assert.ok(chunks.length > 1);
+  assert.ok(chunks.every((chunk) => Array.from(chunk).length <= 25));
+  assert.equal(chunks.join(''), prompt);
 });
 
 test('looksLikeComposerPlaceholderText rejects composer labels as real prompt text', () => {

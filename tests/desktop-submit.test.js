@@ -26,6 +26,7 @@ const {
   hasVisibleSendStateTransition,
   buildSubmitAttemptOrder,
   shouldUseFastEnterSubmitPath,
+  shouldUseTypedInsertFallback,
   looksLikeStopButton,
   hashText,
   normalizeAddressValue,
@@ -164,7 +165,7 @@ test('hasVisibleSendStateTransition requires a real idle-to-send UI change', () 
 test('buildSubmitAttemptOrder prefers practical enter fallback when send button is not proven', () => {
   assert.deepEqual(buildSubmitAttemptOrder('click', null), ['enter', 'click']);
   assert.deepEqual(buildSubmitAttemptOrder('click', { name: 'Send', isEnabled: true }), ['click', 'enter']);
-  assert.deepEqual(buildSubmitAttemptOrder('enter', { name: 'Send', isEnabled: true }), ['enter', 'click']);
+  assert.deepEqual(buildSubmitAttemptOrder('enter', { name: 'Send', isEnabled: true }), ['click', 'enter']);
 });
 
 test('deriveSubmitProof prefers strong post-submit UI signals', () => {
@@ -350,6 +351,46 @@ test('shouldUseFastEnterSubmitPath enables short post-submit wait for validated 
   ), false);
 });
 
+test('shouldUseTypedInsertFallback only opens when the clipboard paste looks like a real no-op', () => {
+  assert.equal(shouldUseTypedInsertFallback({
+    prompt: '짧은 live check',
+    promptProof: {
+      text: 'ChatGPT와 채팅',
+      element: { automationId: 'prompt-textarea', className: 'ProseMirror' },
+      focusedElement: { automationId: 'prompt-textarea', className: 'ProseMirror-focused' }
+    },
+    visibleProof: {
+      ok: false,
+      submitState: { sendable: false }
+    },
+    visualProof: {
+      ok: false,
+      proof: 'composerVisualUnchanged'
+    },
+    composerTarget: { automationId: 'prompt-textarea', className: 'ProseMirror-focused' },
+    promptFocus: { element: { automationId: 'prompt-textarea', className: 'ProseMirror' } }
+  }), true);
+
+  assert.equal(shouldUseTypedInsertFallback({
+    prompt: '짧은 live check',
+    promptProof: {
+      text: '',
+      element: { automationId: 'prompt-textarea', className: 'ProseMirror' },
+      focusedElement: { automationId: 'prompt-textarea', className: 'ProseMirror-focused' }
+    },
+    visibleProof: {
+      ok: false,
+      submitState: { sendable: false }
+    },
+    visualProof: {
+      ok: true,
+      proof: 'composerVisualMarkersMatched'
+    },
+    composerTarget: { automationId: 'prompt-textarea', className: 'ProseMirror-focused' },
+    promptFocus: { element: { automationId: 'prompt-textarea', className: 'ProseMirror' } }
+  }), false);
+});
+
 test('buildPromptMarkers and marker counting prefer long-prompt anchors over full exact OCR', () => {
   const prompt = [
     '첫 줄 요약: 2026년 4월 나스닥 전망과 금리 이벤트를 함께 분석해줘.',
@@ -361,6 +402,18 @@ test('buildPromptMarkers and marker counting prefer long-prompt anchors over ful
 
   assert.equal(markerSpec.requiredMatches, 2);
   assert.equal(countPromptMarkers(ocrText, markerSpec.markers) >= 2, true);
+});
+
+test('buildPromptMarkers uses a tolerant prefix anchor for short single-line prompts', () => {
+  const prompt = 'LIVE TYPE FALLBACK 2026-03-27T10:19:00+09:00';
+  const markerSpec = buildPromptMarkers(prompt);
+
+  assert.equal(markerSpec.requiredMatches, 1);
+  assert.equal(markerSpec.markers[0], normalizeMarkerText(prompt).slice(0, 32));
+  assert.equal(
+    countPromptMarkers('live type fallback 2026-03-27t10', markerSpec.markers),
+    1
+  );
 });
 
 test('looksLikeVisualComposerPlaceholder treats bare placeholder OCR as non-proof', () => {

@@ -37,7 +37,7 @@ Adopt a dedicated **desktop Pro handoff** path.
 ## Consequences
 
 - The skill now optimizes for a specific high-reasoning handoff workflow instead of being only a generic prompt submitter.
-- The desktop path still does not expand into response scraping, login automation, project handling, or attachment support.
+- The desktop path still does not expand into response scraping, authentication bypass, project handling, or attachment support. Official visible-UI login recovery follows ADR 0006.
 - `modeResolved` now represents the actual requested mode (`auto` or `pro`) instead of a transport label.
 - Strict Pro receipts now carry `surface`, `proofLevel`, `targetWindowHandle`, `conversationUrl`, and `screenshotPath`.
 - The success contract is intentionally narrower: `submitted: true` on the strict path now requires a new conversation URL proof plus a saved screenshot of the exact target window. When omnibox reads drift, the implementation is allowed to recover that proof from OCR on the visible target-window screenshot.

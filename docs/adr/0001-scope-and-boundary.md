@@ -1,6 +1,6 @@
 # ADR 0001: Scope and Boundary
 
-- Status: Accepted
+- Status: Accepted; authentication boundary superseded by ADR 0006
 - Date: 2026-03-25
 
 ## Context
@@ -20,7 +20,7 @@ The project goal is an OSS MVP that dispatches prompts into a locally logged-in 
 
 - Reading, scraping, or structuring ChatGPT responses.
 - Calling unofficial APIs, private endpoints, or reverse-engineered internal interfaces.
-- Automating authentication or bypassing login steps.
+- Bypassing provider authentication. Official visible-UI authentication is governed by ADR 0006.
 - Extracting, backing up, exporting, or reusing cookies, tokens, or account/session secrets.
 - Background account automation outside the visible browser UI.
 

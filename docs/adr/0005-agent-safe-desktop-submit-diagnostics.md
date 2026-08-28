@@ -46,4 +46,4 @@ Adopt an agent-safe desktop submit contract.
 - The Pro path is biased toward `Enter` as the safest cross-machine submit primitive.
 - The runtime remains fail-closed after one retry, reducing duplicate-submit risk.
 - Aggregate logs remain useful for compatibility, but run bundles are now the canonical diagnostic surface.
-- The repository still does not add reply scraping, login automation, cookie extraction, or unofficial API usage.
+- The repository still does not add reply scraping, cookie extraction, authentication bypass, or unofficial API usage. Official visible-UI login recovery follows ADR 0006.

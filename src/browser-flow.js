@@ -7,8 +7,8 @@ export function buildFlowPlan(profile, args) {
     locale: resolvedUi.locale,
     tier: resolvedUi.tier,
     loginCheck: {
-      strategy: 'visible-ui-only-wait',
-      notes: ['If not logged in, wait for manual login and do not automate authentication.']
+      strategy: 'visible-ui-auth-recovery',
+      notes: ['If signed out, continue the official visible login with available authorized automation; wait only for provider-enforced user presence.']
     },
     navigation: {
       url: 'https://chatgpt.com/'

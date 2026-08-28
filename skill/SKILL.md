@@ -1,6 +1,6 @@
 ---
 name: chatgpt-web-submit
-description: Desktop-native ChatGPT Pro handoff on Windows for sending a strong final prompt into a visible, already logged-in ChatGPT session. Use when the user asks to send something to ChatGPT Pro, asks for a stronger high-reasoning prompt and wants it executed, or says things like "이거 Pro로 보내", "고급추론용 프롬프트 탄탄하게 만들어서 실행", or "이 프롬프트를 ChatGPT Pro로 전달해줘". Do not use when the task requires reading replies, scraping responses, automating login, extracting cookies/session data, or calling unofficial APIs.
+description: Desktop-native ChatGPT Pro handoff on Windows for sending a strong final prompt through a visible ChatGPT session, including official login recovery when required. Use when the user asks to send something to ChatGPT Pro, asks for a stronger high-reasoning prompt and wants it executed, or says things like "이거 Pro로 보내", "고급추론용 프롬프트 탄탄하게 만들어서 실행", or "이 프롬프트를 ChatGPT Pro로 전달해줘". Do not use when the task requires reading replies, scraping responses, extracting cookies/session data, bypassing provider authentication, or calling unofficial APIs.
 user-invocable: true
 metadata: {"openclaw":{"os":["win32"],"requires":{"bins":["node"]}}}
 ---
@@ -20,9 +20,13 @@ Do:
 Do not:
 - read or summarize ChatGPT's reply
 - scrape transcript content
-- automate login
 - inspect or export browser storage, cookies, or tokens
 - switch to hidden APIs or internal endpoints
+- bypass provider authentication or start account recovery
+
+If the session is signed out, continue the official visible login with an existing session,
+password-manager/autofill, or authorized browser/device automation. Hand off only a CAPTCHA,
+biometric, hardware-key, or other provider-enforced user-presence step, then resume the same run.
 
 ## Default Behavior
 

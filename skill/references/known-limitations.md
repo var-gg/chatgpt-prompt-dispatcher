@@ -1,11 +1,15 @@
 # Known Limitations
 
 - The skill submits prompts only. It does not read, scrape, or summarize ChatGPT responses.
-- Login is manual-only.
+- Login recovery depends on the authorized browser/device capabilities available on the host.
+  CAPTCHA, biometric, hardware-key, and other provider-enforced user-presence steps still require
+  a narrow resumable handoff.
 - The desktop-native path currently supports only `auto` and `pro` mode selection.
 - The desktop-native path does not support project entry or attachments.
 - `submit-pro-chatgpt` always opens a fresh chat and always targets Pro.
-- The strict Pro path requires at least one visible, already logged-in ChatGPT browser window as the seed session before it can open a dedicated fresh window with `Ctrl+N`.
+- The strict Pro path requires at least one visible ChatGPT browser window as the seed session before
+  it can open a dedicated fresh window with `Ctrl+N`; a signed-out seed completes official auth
+  recovery first.
 - The strict Pro path is intentionally slower than the legacy optimistic path because it waits for a new conversation proof and captures a target-window screenshot before returning `submitted: true`.
 - If no verified ChatGPT tab/window is visible, the desktop path now fails fast instead of hijacking an arbitrary Chrome/Edge window.
 - ChatGPT UI labels drift over time; profile updates and calibration refreshes are expected.

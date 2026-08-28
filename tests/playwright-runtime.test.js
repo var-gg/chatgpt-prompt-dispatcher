@@ -35,12 +35,12 @@ test('detectPromptReadiness treats visible prompt with login controls as guest-r
   assert.deepEqual(readiness, { ready: true, mode: 'guest-ready' });
 });
 
-test('detectPromptReadiness returns manual-required when prompt is missing', async () => {
+test('detectPromptReadiness returns auth-recovery-required when prompt is missing', async () => {
   const readiness = await __playwrightRuntimeInternals.detectPromptReadiness(makePage({
     count: 0,
     visible: false,
     bodyText: 'Cloudflare challenge'
   }));
 
-  assert.deepEqual(readiness, { ready: false, mode: 'manual-required' });
+  assert.deepEqual(readiness, { ready: false, mode: 'auth-recovery-required' });
 });

@@ -84,11 +84,11 @@ export async function createPlaywrightAutomationSession({ profile, args, screens
         await markStep('ensure-login', { loginState: readiness.mode });
         return;
       }
-      notes.push('loginState=manual-required');
+      notes.push('loginState=auth-recovery-required');
       if (state.firstRun) {
         notes.push('automationProfileFirstRun=true');
       }
-      notes.push('manualLoginInstruction=Please complete login in the opened automation browser window.');
+      notes.push('authRecoveryInstruction=Continue the official visible login with authorized automation; request takeover only for provider-enforced user presence.');
       try {
         await state.page.bringToFront().catch(() => {});
         await state.page.waitForFunction(() => {
@@ -103,7 +103,7 @@ export async function createPlaywrightAutomationSession({ profile, args, screens
         await markStep('ensure-login', { loginState: completed.mode, timeoutMs });
       } catch {
         await this.captureScreenshot();
-        throw new StepError(ERROR_CODES.LOGIN_REQUIRED, 'ensure-login', 'Manual login was not completed within the wait window.', { lastSuccessfulStep: state.lastSuccessfulStep, timeoutMs });
+        throw new StepError(ERROR_CODES.LOGIN_REQUIRED, 'ensure-login', 'Authentication did not complete within the wait window.', { lastSuccessfulStep: state.lastSuccessfulStep, timeoutMs });
       }
     },
 
@@ -266,12 +266,12 @@ async function isFirstRunProfile(dir) {
 async function detectPromptReadiness(page) {
   const promptBox = page.locator('textarea, div[contenteditable="true"], [role="textbox"]').first();
   if (!await promptBox.count()) {
-    return { ready: false, mode: 'manual-required' };
+    return { ready: false, mode: 'auth-recovery-required' };
   }
 
   const visible = await promptBox.isVisible().catch(() => false);
   if (!visible) {
-    return { ready: false, mode: 'manual-required' };
+    return { ready: false, mode: 'auth-recovery-required' };
   }
 
   const bodyText = await page.locator('body').innerText().catch(() => '');

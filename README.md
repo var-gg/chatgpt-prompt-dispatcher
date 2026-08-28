@@ -1,6 +1,6 @@
-# Windows desktop ChatGPT Pro handoff skill
+# Unofficial local input automation for ChatGPT web
 
-`chatgpt-prompt-dispatcher` is a local Windows skill/runtime for sending prompts into a visible, already logged-in ChatGPT web session without scraping replies.
+`chatgpt-prompt-dispatcher` is a local Windows skill/runtime for sending prompts into a visible ChatGPT web session, recovering the official login when needed, and avoiding reply scraping.
 
 The repo is **desktop-first**:
 - primary path = calibrated Windows desktop dispatch into ChatGPT
@@ -26,9 +26,10 @@ Receipt semantics:
 
 ## What it does not do
 
+The dispatcher does **not**:
 - read assistant responses
 - scrape transcript content
-- automate login
+- bypass provider authentication or start account recovery
 - call unofficial APIs or hidden endpoints
 - extract cookies, tokens, or browser session data
 
@@ -38,7 +39,7 @@ Receipt semantics:
 - same user session for Node, the PowerShell worker, and the visible Chrome/Edge window
 - non-elevated browser and non-elevated dispatcher runtime
 - clipboard access allowed
-- existing manual ChatGPT login
+- an existing session or an authorized visible-UI route for official ChatGPT login recovery
 - keep a visible ChatGPT tab/window, or a blank/new browser shell that can be safely navigated to ChatGPT
 
 ## Repo URL Quickstart
@@ -66,12 +67,12 @@ If the dry-run receipt succeeds, the installed skill is ready for agent-driven u
 When handing only this repo to another agent, the agent should:
 - treat `npm install` then `npm run register-openclaw` as the canonical bootstrap path
 - prefer the installed wrapper at `~/.openclaw/skills/chatgpt-web-submit/scripts/submit-pro.js`
-- assume the target machine is a local Windows desktop with a visible, already logged-in ChatGPT browser window
+- assume the target machine is a local Windows desktop with a visible ChatGPT browser window and use capability-first official login recovery if it is signed out
 - use `npm run inspect-desktop` or `npm run calibrate-desktop` before weakening the desktop boundary
 
 The agent should not:
 - try to read ChatGPT replies from the browser
-- automate login
+- bypass provider authentication or start account recovery
 - inspect cookies, tokens, session storage, or hidden APIs
 - silently switch the workflow to response scraping
 

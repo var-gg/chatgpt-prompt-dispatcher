@@ -7,7 +7,7 @@ Pivot this repo toward a **Windows desktop-input dispatcher for ChatGPT Web** wh
 - ChatGPT-specific only
 - local visible desktop interaction only
 - no response scraping
-- no login automation
+- no authentication bypass, cookie/session extraction, or out-of-scope account recovery
 - no generic RPA ambitions
 
 This desktop path is now the **primary transport**. The retained Playwright path remains available only as an experimental compatibility transport.

@@ -89,7 +89,7 @@ function printHelp() {
     '  submit-chatgpt [opts]             Submit a prompt through the default Windows desktop transport',
     '  submit-pro-chatgpt [opts]         Open a dedicated fresh desktop window, switch to Pro, and submit with strict proof',
     '  submit-browser-chatgpt [opts]     Submit through the experimental browser transport (Playwright)',
-    '  warmup-chatgpt [opts]             Open ChatGPT and hold the browser for manual login/captcha',
+    '  warmup-chatgpt [opts]             Open ChatGPT and hold the browser for auth recovery/captcha handoff',
     '  submit-desktop-chatgpt [opts]     Explicit alias for the default Windows desktop transport',
     '  calibrate-desktop-chatgpt [opts]  Interactively capture desktop anchors and save a calibration profile',
     '  inspect-desktop-chatgpt [opts]    Dump URL, window rect, focus element, and UIA snapshot as JSON',
